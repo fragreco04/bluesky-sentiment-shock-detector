@@ -1,1 +1,4 @@
 github_token.txt
+.env
+X_studio/
+.venv/

@@ -1,0 +1,294 @@
+x-spark-image: &spark-image
+  build:
+    context: ./spark
+    args:
+      SPARK_VERSION: ${SPARK_VERSION}
+      SCALA_VERSION: ${SCALA_VERSION}
+      SENTIMENT_MODEL_NAME: ${SENTIMENT_MODEL_NAME}
+      SENTIMENT_MODEL_PATH: ${SENTIMENT_MODEL_PATH}
+      SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR}
+  image: my_spark:${SPARK_VERSION}     # stessa immagine per driver, master e worker (stesso Python, stesso modello)
+
+x-spark-worker: &spark-worker
+  <<: *spark-image
+  restart: unless-stopped
+  init: true
+  command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "${SPARK_MASTER_URL}"]
+  environment:
+    SPARK_WORKER_CORES: ${SPARK_WORKER_CORES}     # core offerti dal worker
+    SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY}   # memoria assegnabile agli executor
+    SPARK_DAEMON_MEMORY: ${SPARK_DAEMON_MEMORY}   # heap del processo worker (default 1g)
+  volumes:
+    # Lo stato della deduplica lo scrivono gli EXECUTOR: il checkpoint deve essere
+    # visibile, allo stesso percorso, al driver e a tutti i worker.
+    - spark-checkpoints:${SPARK_CHECKPOINT_DIR}
+  depends_on:
+    spark-master:
+      condition: service_healthy
+
+services:
+  producer:
+    build: ./jetstream_producer
+    container_name: jetstream_producer
+    restart: unless-stopped
+    init: true
+    environment:
+      JETSTREAM_URL: ${JETSTREAM_URL}
+      LOGSTASH_HOST: ${LOGSTASH_HOST}
+      LOGSTASH_PORT: ${LOGSTASH_PORT}
+    depends_on:
+      logstash:
+        condition: service_healthy    # parte solo quando Logstash accetta connessioni
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${LOGSTASH_VERSION}
+    container_name: logstash
+    restart: unless-stopped
+    ports:
+      # Solo per test dal tuo PC; Non viene usata; BIND_ADDRESS=127.0.0.1 = non raggiungibile da altri in rete
+      - "${BIND_ADDRESS}:${LOGSTASH_PORT}:${LOGSTASH_PORT}"
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro       # ro: read-only
+    environment:
+      LS_JAVA_OPTS: "-Xms${LOGSTASH_HEAP} -Xmx${LOGSTASH_HEAP}"     # heap Java limitato
+      LOGSTASH_PORT: ${LOGSTASH_PORT}
+      KAFKA_BOOTSTRAP_HOST: ${KAFKA_BOOTSTRAP_HOST}
+      KAFKA_INTERNAL_PORT: ${KAFKA_INTERNAL_PORT}
+      KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW}       # nella pipeline: topic_id => "${KAFKA_TOPIC_RAW}"
+    healthcheck:
+      # Healthy quando la porta dell'input TCP è in ascolto
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/${LOGSTASH_PORT}'"]
+      start_period: 120s      # Logstash impiega parecchio ad avviarsi: deve bastare anche nel caso peggiore
+      start_interval: 5s      # frequenza durante lo start_period
+      interval: 5m            # frequenza dopo, quando ormai serve solo come indicatore
+      timeout: 5s             # una connessione TCP: 5s sono abbondanti
+      retries: 3
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  kafka:
+    image: apache/kafka:${KAFKA_VERSION}
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS}:${KAFKA_EXTERNAL_PORT}:${KAFKA_EXTERNAL_PORT}"
+    volumes:
+      - kafka-data:/var/lib/kafka/data        # dati dei topic: sopravvivono a down/up, spariscono solo con down -v
+    environment:
+      KAFKA_NODE_ID: ${KAFKA_NODE_ID}
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_NODE_ID}@${KAFKA_BOOTSTRAP_HOST}:${KAFKA_CONTROLLER_PORT}
+      KAFKA_LISTENERS: INTERNAL://:${KAFKA_INTERNAL_PORT},EXTERNAL://:${KAFKA_EXTERNAL_PORT},CONTROLLER://:${KAFKA_CONTROLLER_PORT}
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT},EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT}   # dice ai client dove connettersi
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: ${KAFKA_LOG_RETENTION_HOURS}   # dati più vecchi cancellabili
+      KAFKA_LOG_SEGMENT_BYTES: ${KAFKA_LOG_SEGMENT_BYTES}       # segmenti piccoli: si chiudono prima e la retention funziona
+      KAFKA_HEAP_OPTS: "-Xms${KAFKA_HEAP} -Xmx${KAFKA_HEAP}"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data     # dove Kafka scrive i dati: esplicito, non il default dell'immagine
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT} > /dev/null 2>&1"]
+      start_period: 60s
+      start_interval: 5s      # frequenza durante lo start_period
+      interval: 5m            # frequenza dopo, quando ormai serve solo come indicatore
+      timeout: 30s            # ogni check avvia una JVM: 10s possono non bastare
+      retries: 3
+
+  # Servizio che crea i topic
+  kafka-init:
+    image: apache/kafka:${KAFKA_VERSION}
+    container_name: kafka_init
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_TOPICS: ${KAFKA_TOPICS}
+      BOOTSTRAP: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        for spec in $${KAFKA_TOPICS}
+        do
+          topic="$${spec%%:*}"
+          rest="$${spec#*:}"
+          partitions="$${rest%%:*}"
+          retention="$${rest#*:}"
+
+          /opt/kafka/bin/kafka-topics.sh \
+            --bootstrap-server "$${BOOTSTRAP}" \
+            --create --if-not-exists \
+            --topic "$${topic}" \
+            --partitions "$${partitions}" \
+            --replication-factor 1
+
+          /opt/kafka/bin/kafka-configs.sh \
+            --bootstrap-server "$${BOOTSTRAP}" \
+            --alter --entity-type topics --entity-name "$${topic}" \
+            --add-config retention.ms="$${retention}"
+        done
+
+  # consumer:
+  #   build: ./consumer
+  #   container_name: python_consumer
+  #   restart: unless-stopped
+  #   init: true
+  #   environment:
+  #     KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
+  #     KAFKA_TOPIC: ${CONSUMER_TOPIC}
+  #   depends_on:
+  #     kafka-init:
+  #       condition: service_completed_successfully
+
+  # kafka-ui:
+  #   image: ghcr.io/kafbat/kafka-ui:${KAFKA_UI_VERSION}
+  #   container_name: kafka_ui
+  #   restart: unless-stopped
+  #   ports:
+  #     - "${BIND_ADDRESS}:${KAFKA_UI_PORT}:8080"
+  #   environment:
+  #     DYNAMIC_CONFIG_ENABLED: "true"
+  #     KAFKA_CLUSTERS_0_NAME: local
+  #     KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  #  Spark standalone: 1 master + 2 worker (un executor ciascuno), condivisi;
+  #  un servizio driver per ogni query: spark-q1 (sul cluster), spark-q2 (local mode)
+  # ---------------------------------------------------------------------------
+  spark-master:
+    <<: *spark-image
+    container_name: spark_master
+    restart: unless-stopped
+    init: true
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "${SPARK_MASTER_HOST}", "--port", "${SPARK_MASTER_PORT}"]   # UI sulla porta di default 8080
+    ports:
+      - "${BIND_ADDRESS}:${SPARK_MASTER_UI_PORT}:8080"   # UI del master: worker registrati e applicazioni
+    environment:
+      SPARK_DAEMON_MEMORY: ${SPARK_DAEMON_MEMORY}       # heap del processo master (default 1g)
+    healthcheck:
+      # Il master ascolta solo sull'IP di ${SPARK_MASTER_HOST}, non su 127.0.0.1
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/${SPARK_MASTER_HOST}/${SPARK_MASTER_PORT}'"]
+      start_period: 60s
+      start_interval: 5s      # frequenza durante lo start_period
+      interval: 5m            # frequenza dopo, quando ormai serve solo come indicatore
+      timeout: 5s             # una connessione TCP: 5s sono abbondanti
+      retries: 3
+
+  spark-worker-1:
+    <<: *spark-worker
+    container_name: spark_worker_1
+
+  spark-worker-2:
+    <<: *spark-worker
+    container_name: spark_worker_2
+
+  spark-q1:                            # Q1: driver dell'arricchimento, esegue spark-submit in client mode sul cluster
+    <<: *spark-image
+    container_name: spark_q1
+    hostname: ${SPARK_Q1_DRIVER_HOST}     # gli executor richiamano il driver con questo nome
+    restart: "no"                      # in sviluppo: se il job crasha voglio vedere l'errore, non un loop di riavvii
+    init: true
+    ports:
+      - "${BIND_ADDRESS}:${SPARK_Q1_UI_PORT}:4040"     # Spark UI (tab "Structured Streaming")
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
+      INPUT_TOPIC: ${KAFKA_TOPIC_RAW}
+      OUTPUT_TOPIC: ${KAFKA_TOPIC_ENRICHED}
+      STARTING_OFFSETS: ${SPARK_Q1_STARTING_OFFSETS}
+      MAX_OFFSETS_PER_TRIGGER: ${SPARK_Q1_MAX_OFFSETS_PER_TRIGGER}
+      TRIGGER_INTERVAL: ${SPARK_Q1_TRIGGER_INTERVAL}
+      DEDUP_WATERMARK: ${SPARK_Q1_DEDUP_WATERMARK}
+      SHUFFLE_PARTITIONS: ${SPARK_Q1_SHUFFLE_PARTITIONS}
+      TORCH_THREADS: ${SPARK_Q1_TORCH_THREADS}         # letto sul driver, arriva alla UDF sugli executor
+      SENTIMENT_MODEL_NAME: ${SENTIMENT_MODEL_NAME}
+      SENTIMENT_MODEL_PATH: ${SENTIMENT_MODEL_PATH}
+      PYTHONUNBUFFERED: "1"
+      CHECKPOINT_ROOT: ${SPARK_CHECKPOINT_DIR}
+    volumes:
+      - ./spark/jobs:${SPARK_JOBS_DIR}:ro
+      - spark-checkpoints:${SPARK_CHECKPOINT_DIR}
+    command:
+      - /opt/spark/bin/spark-submit     # è il metodo ufficiale per avviare spark
+      - --master
+      - ${SPARK_Q1_MASTER}              # spark://spark-master:7077 = cluster; local[*] = tutto nel driver
+      - --deploy-mode
+      - client                          # il driver gira qui, gli executor sui worker
+      - --driver-memory
+      - ${SPARK_Q1_DRIVER_MEMORY}
+      - --executor-memory               # heap JVM di ogni executor (il modello sta fuori, nel processo Python)
+      - ${SPARK_Q1_EXECUTOR_MEMORY}
+      - --executor-cores
+      - ${SPARK_Q1_EXECUTOR_CORES}
+      - --total-executor-cores          # tetto di core per questa applicazione
+      - ${SPARK_Q1_CORES_MAX}
+      - --conf
+      - spark.task.cpus=${SPARK_Q1_TASK_CPUS}    # core per task: 1 task per executor = 1 copia del modello
+      - --packages                      # connettore Kafka, scaricato all'avvio da Maven Central
+      - org.apache.spark:spark-sql-kafka-0-10_${SCALA_VERSION}:${SPARK_VERSION}
+      - --conf
+      - spark.jars.ivy=/tmp/ivy         # cartella scrivibile per la cache dei jar (l'utente "spark" non ha una home)
+      - --conf
+      - spark.driver.host=${SPARK_Q1_DRIVER_HOST}   # indirizzo che il driver comunica agli executor
+      - --conf
+      - spark.driver.bindAddress=0.0.0.0
+      - ${SPARK_JOBS_DIR}/${SPARK_Q1_JOB}   # Indica il programma da eseguire
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      spark-worker-1:
+        condition: service_started
+      spark-worker-2:
+        condition: service_started
+
+  spark-q2:                            # Q2: aggregazione a finestre, driver ed executor nello stesso processo
+    <<: *spark-image
+    container_name: spark_q2
+    restart: "no"
+    init: true
+    ports:
+      - "${BIND_ADDRESS}:${SPARK_Q2_UI_PORT}:4040"     # Spark UI di Q2
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
+      INPUT_TOPIC: ${KAFKA_TOPIC_ENRICHED}
+      OUTPUT_TOPIC: ${KAFKA_TOPIC_SENTIMENT}
+      STARTING_OFFSETS: ${SPARK_Q2_STARTING_OFFSETS}
+      MAX_OFFSETS_PER_TRIGGER: ${SPARK_Q2_MAX_OFFSETS_PER_TRIGGER}
+      TRIGGER_INTERVAL: ${SPARK_Q2_TRIGGER_INTERVAL}
+      WINDOW_DURATION: ${SPARK_Q2_WINDOW}
+      WATERMARK_DELAY: ${SPARK_Q2_WATERMARK}
+      MAX_FUTURE_SKEW: ${SPARK_Q2_MAX_FUTURE_SKEW}
+      SHUFFLE_PARTITIONS: ${SPARK_Q2_SHUFFLE_PARTITIONS}
+      CHECKPOINT_ROOT: ${SPARK_CHECKPOINT_DIR}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./spark/jobs:${SPARK_JOBS_DIR}:ro
+      - spark-checkpoints:${SPARK_CHECKPOINT_DIR}
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - ${SPARK_Q2_MASTER}              # local[N]: niente cluster, Q1 ha gia' preso tutti i core dei worker
+      - --driver-memory
+      - ${SPARK_Q2_DRIVER_MEMORY}
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_${SCALA_VERSION}:${SPARK_VERSION}
+      - --conf
+      - spark.jars.ivy=/tmp/ivy
+      - ${SPARK_JOBS_DIR}/${SPARK_Q2_JOB}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+volumes:
+  spark-checkpoints:
+  kafka-data:
