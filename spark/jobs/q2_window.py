@@ -13,11 +13,6 @@ from pyspark.sql import functions as F
 from pyspark.sql.streaming import StreamingQueryListener
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
-# ---------------------------------------------------------------------------
-# Configurazione (stessa convenzione di Q1)
-# os.environ[...] per tutto cio' che arriva dal .env tramite il compose;
-# os.getenv(..., default) solo per i parametri definiti esclusivamente qui.
-# ---------------------------------------------------------------------------
 KAFKA_BOOTSTRAP_SERVERS = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
 INPUT_TOPIC = os.environ["INPUT_TOPIC"]                    # posts.enriched
 OUTPUT_TOPIC = os.environ["OUTPUT_TOPIC"]                  # sentiment.1m
@@ -30,8 +25,6 @@ MAX_FUTURE_SKEW = os.environ["MAX_FUTURE_SKEW"]            # "1 minute": tollera
 SHUFFLE_PARTITIONS = os.environ["SHUFFLE_PARTITIONS"]      # fissato nel checkpoint
 CHECKPOINT_ROOT = os.environ["CHECKPOINT_ROOT"]
 
-# Errore relativo di approx_count_distinct (HyperLogLog++). Default Spark 0.05;
-# 0.02 costa pochi KB di stato per finestra.
 APPROX_DISTINCT_RSD = float(os.getenv("APPROX_DISTINCT_RSD", "0.02"))
 
 # Il checkpoint dipende dal topic di uscita: cambiare finestra significa cambiare
@@ -40,10 +33,6 @@ CHECKPOINT = f"{CHECKPOINT_ROOT}/q2_window/{OUTPUT_TOPIC}"
 
 ISO_UTC = "yyyy-MM-dd'T'HH:mm:ss'Z'"   # la sessione e' in UTC, quindi la 'Z' letterale e' corretta
 
-# ---------------------------------------------------------------------------
-# Schemi
-# ---------------------------------------------------------------------------
-# Solo i campi che servono a Q2: from_json ignora text, link_title, ecc.
 ENRICHED_SCHEMA = StructType([
     StructField("uri", StringType(), True),
     StructField("did", StringType(), True),

@@ -1,4 +1,6 @@
-x-spark-image: &spark-image
+# Ancore YAML: blocchi riusati con "<<: *nome" (merge superficiale: una chiave
+# ridefinita nel servizio sostituisce quella dell'ancora, non si fonde con essa).
+x-spark-image: &spark-image          # usata da master, worker, spark-q1, spark-q2
   build:
     context: ./spark
     args:
@@ -9,22 +11,13 @@ x-spark-image: &spark-image
       SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR}
   image: my_spark:${SPARK_VERSION}     # stessa immagine per driver, master e worker (stesso Python, stesso modello)
 
-x-spark-worker: &spark-worker
+x-spark-driver: &spark-driver        # usata da spark-q1 e spark-q2: cio' che hanno in comune i due driver
   <<: *spark-image
-  restart: unless-stopped
   init: true
-  command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "${SPARK_MASTER_URL}"]
-  environment:
-    SPARK_WORKER_CORES: ${SPARK_WORKER_CORES}     # core offerti dal worker
-    SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY}   # memoria assegnabile agli executor
-    SPARK_DAEMON_MEMORY: ${SPARK_DAEMON_MEMORY}   # heap del processo worker (default 1g)
+  restart: unless-stopped              # il checkpoint rende il riavvio sicuro: la query riprende dall'ultimo batch confermato
   volumes:
-    # Lo stato della deduplica lo scrivono gli EXECUTOR: il checkpoint deve essere
-    # visibile, allo stesso percorso, al driver e a tutti i worker.
+    - ./spark/jobs:${SPARK_JOBS_DIR}:ro
     - spark-checkpoints:${SPARK_CHECKPOINT_DIR}
-  depends_on:
-    spark-master:
-      condition: service_healthy
 
 services:
   producer:
@@ -52,9 +45,10 @@ services:
     environment:
       LS_JAVA_OPTS: "-Xms${LOGSTASH_HEAP} -Xmx${LOGSTASH_HEAP}"     # heap Java limitato
       LOGSTASH_PORT: ${LOGSTASH_PORT}
-      KAFKA_BOOTSTRAP_HOST: ${KAFKA_BOOTSTRAP_HOST}
+      KAFKA_BOOTSTRAP_HOST: ${KAFKA_BOOTSTRAP_HOST}   # nella pipeline: bootstrap_servers => "${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}"
       KAFKA_INTERNAL_PORT: ${KAFKA_INTERNAL_PORT}
       KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW}       # nella pipeline: topic_id => "${KAFKA_TOPIC_RAW}"
+      KAFKA_TOPIC_DLQ: ${KAFKA_TOPIC_DLQ}       # nella pipeline: topic_id => "${KAFKA_TOPIC_DLQ}"
     healthcheck:
       # Healthy quando la porta dell'input TCP è in ascolto
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/${LOGSTASH_PORT}'"]
@@ -136,48 +130,17 @@ services:
             --add-config retention.ms="$${retention}"
         done
 
-  # consumer:
-  #   build: ./consumer
-  #   container_name: python_consumer
-  #   restart: unless-stopped
-  #   init: true
-  #   environment:
-  #     KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
-  #     KAFKA_TOPIC: ${CONSUMER_TOPIC}
-  #   depends_on:
-  #     kafka-init:
-  #       condition: service_completed_successfully
-
-  # kafka-ui:
-  #   image: ghcr.io/kafbat/kafka-ui:${KAFKA_UI_VERSION}
-  #   container_name: kafka_ui
-  #   restart: unless-stopped
-  #   ports:
-  #     - "${BIND_ADDRESS}:${KAFKA_UI_PORT}:8080"
-  #   environment:
-  #     DYNAMIC_CONFIG_ENABLED: "true"
-  #     KAFKA_CLUSTERS_0_NAME: local
-  #     KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
-  #   depends_on:
-  #     kafka:
-  #       condition: service_healthy
-
-  # ---------------------------------------------------------------------------
-  #  Spark standalone: 1 master + 2 worker (un executor ciascuno), condivisi;
-  #  un servizio driver per ogni query: spark-q1 (sul cluster), spark-q2 (local mode)
-  # ---------------------------------------------------------------------------
   spark-master:
     <<: *spark-image
     container_name: spark_master
     restart: unless-stopped
     init: true
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "${SPARK_MASTER_HOST}", "--port", "${SPARK_MASTER_PORT}"]   # UI sulla porta di default 8080
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "${SPARK_MASTER_HOST}", "--port", "${SPARK_MASTER_PORT}"]
     ports:
       - "${BIND_ADDRESS}:${SPARK_MASTER_UI_PORT}:8080"   # UI del master: worker registrati e applicazioni
     environment:
       SPARK_DAEMON_MEMORY: ${SPARK_DAEMON_MEMORY}       # heap del processo master (default 1g)
     healthcheck:
-      # Il master ascolta solo sull'IP di ${SPARK_MASTER_HOST}, non su 127.0.0.1
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/${SPARK_MASTER_HOST}/${SPARK_MASTER_PORT}'"]
       start_period: 60s
       start_interval: 5s      # frequenza durante lo start_period
@@ -185,20 +148,31 @@ services:
       timeout: 5s             # una connessione TCP: 5s sono abbondanti
       retries: 3
 
-  spark-worker-1:
-    <<: *spark-worker
-    container_name: spark_worker_1
-
-  spark-worker-2:
-    <<: *spark-worker
-    container_name: spark_worker_2
-
-  spark-q1:                            # Q1: driver dell'arricchimento, esegue spark-submit in client mode sul cluster
+  # Un solo servizio per tutti i worker: sono identici, quindi si scalano invece di
+  # copiarli (niente container_name, incompatibile con le repliche; niente porta della
+  # UI pubblicata: i worker si vedono dalla UI del master).
+  spark-worker:
     <<: *spark-image
+    container_name: spark_worker
+    restart: unless-stopped
+    init: true
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "${SPARK_MASTER_URL}"]
+    deploy:
+      replicas: ${SPARK_WORKER_REPLICAS}
+    environment:
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES}     # core offerti dal worker
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY}   # heap assegnabile agli executor (i processi Python stanno fuori)
+      SPARK_DAEMON_MEMORY: ${SPARK_DAEMON_MEMORY}   # heap del processo worker (default 1g)
+    volumes:
+      - spark-checkpoints:${SPARK_CHECKPOINT_DIR}   # gli executor scrivono lo stato della deduplica nel checkpoint
+    depends_on:
+      spark-master:
+        condition: service_healthy
+
+  spark-driver-q1:                            # Q1: driver dell'arricchimento, spark-submit in client mode sul cluster
+    <<: *spark-driver
     container_name: spark_q1
     hostname: ${SPARK_Q1_DRIVER_HOST}     # gli executor richiamano il driver con questo nome
-    restart: "no"                      # in sviluppo: se il job crasha voglio vedere l'errore, non un loop di riavvii
-    init: true
     ports:
       - "${BIND_ADDRESS}:${SPARK_Q1_UI_PORT}:4040"     # Spark UI (tab "Structured Streaming")
     environment:
@@ -213,27 +187,22 @@ services:
       TORCH_THREADS: ${SPARK_Q1_TORCH_THREADS}         # letto sul driver, arriva alla UDF sugli executor
       SENTIMENT_MODEL_NAME: ${SENTIMENT_MODEL_NAME}
       SENTIMENT_MODEL_PATH: ${SENTIMENT_MODEL_PATH}
-      PYTHONUNBUFFERED: "1"
       CHECKPOINT_ROOT: ${SPARK_CHECKPOINT_DIR}
-    volumes:
-      - ./spark/jobs:${SPARK_JOBS_DIR}:ro
-      - spark-checkpoints:${SPARK_CHECKPOINT_DIR}
+      PYTHONUNBUFFERED: "1"
     command:
-      - /opt/spark/bin/spark-submit     # è il metodo ufficiale per avviare spark
+      - /opt/spark/bin/spark-submit     # e' il metodo ufficiale per avviare spark
       - --master
-      - ${SPARK_Q1_MASTER}              # spark://spark-master:7077 = cluster; local[*] = tutto nel driver
+      - ${SPARK_Q1_MASTER}              # spark://spark-master:7077 = cluster; se fosse stato local[N] = tutto nel driver
       - --deploy-mode
       - client                          # il driver gira qui, gli executor sui worker
       - --driver-memory
       - ${SPARK_Q1_DRIVER_MEMORY}
-      - --executor-memory               # heap JVM di ogni executor (il modello sta fuori, nel processo Python)
+      - --executor-memory               # heap JVM di ogni executor (il modello sta fuori, nei processi Python)
       - ${SPARK_Q1_EXECUTOR_MEMORY}
-      - --executor-cores
+      - --executor-cores                # = core del worker: un executor per worker
       - ${SPARK_Q1_EXECUTOR_CORES}
-      - --total-executor-cores          # tetto di core per questa applicazione
-      - ${SPARK_Q1_CORES_MAX}
       - --conf
-      - spark.task.cpus=${SPARK_Q1_TASK_CPUS}    # core per task: 1 task per executor = 1 copia del modello
+      - spark.task.cpus=${SPARK_Q1_TASK_CPUS}    # core per task: task paralleli per executor = copie del modello
       - --packages                      # connettore Kafka, scaricato all'avvio da Maven Central
       - org.apache.spark:spark-sql-kafka-0-10_${SCALA_VERSION}:${SPARK_VERSION}
       - --conf
@@ -242,20 +211,16 @@ services:
       - spark.driver.host=${SPARK_Q1_DRIVER_HOST}   # indirizzo che il driver comunica agli executor
       - --conf
       - spark.driver.bindAddress=0.0.0.0
-      - ${SPARK_JOBS_DIR}/${SPARK_Q1_JOB}   # Indica il programma da eseguire
+      - ${SPARK_JOBS_DIR}/${SPARK_Q1_JOB}   # il programma da eseguire
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-      spark-worker-1:
-        condition: service_started
-      spark-worker-2:
+      spark-worker:
         condition: service_started
 
-  spark-q2:                            # Q2: aggregazione a finestre, driver ed executor nello stesso processo
-    <<: *spark-image
+  spark-driver-q2:                            # Q2: aggregazione a finestre, driver ed executor nello stesso processo
+    <<: *spark-driver
     container_name: spark_q2
-    restart: "no"
-    init: true
     ports:
       - "${BIND_ADDRESS}:${SPARK_Q2_UI_PORT}:4040"     # Spark UI di Q2
     environment:
@@ -271,9 +236,6 @@ services:
       SHUFFLE_PARTITIONS: ${SPARK_Q2_SHUFFLE_PARTITIONS}
       CHECKPOINT_ROOT: ${SPARK_CHECKPOINT_DIR}
       PYTHONUNBUFFERED: "1"
-    volumes:
-      - ./spark/jobs:${SPARK_JOBS_DIR}:ro
-      - spark-checkpoints:${SPARK_CHECKPOINT_DIR}
     command:
       - /opt/spark/bin/spark-submit
       - --master
@@ -285,6 +247,38 @@ services:
       - --conf
       - spark.jars.ivy=/tmp/ivy
       - ${SPARK_JOBS_DIR}/${SPARK_Q2_JOB}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  spark-driver-q3:                            # Q3: detector, driver ed executor nello stesso processo
+    <<: *spark-driver
+    container_name: spark_q3
+    ports:
+      - "${BIND_ADDRESS}:${SPARK_Q3_UI_PORT}:4040"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
+      INPUT_TOPIC: ${KAFKA_TOPIC_SENTIMENT}
+      MONITOR_TOPIC: ${KAFKA_TOPIC_MONITOR}
+      ALERTS_TOPIC: ${KAFKA_TOPIC_ALERTS}
+      STARTING_OFFSETS: ${SPARK_Q3_STARTING_OFFSETS}
+      MAX_OFFSETS_PER_TRIGGER: ${SPARK_Q3_MAX_OFFSETS_PER_TRIGGER}
+      TRIGGER_INTERVAL: ${SPARK_Q3_TRIGGER_INTERVAL}
+      SHUFFLE_PARTITIONS: ${SPARK_Q3_SHUFFLE_PARTITIONS}
+      CHECKPOINT_ROOT: ${SPARK_CHECKPOINT_DIR}
+      PYTHONUNBUFFERED: "1"
+      # Per un esperimento: DET_K: "4", ecc., insieme a topic di alert e monitor dedicati
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - ${SPARK_Q3_MASTER}
+      - --driver-memory
+      - ${SPARK_Q3_DRIVER_MEMORY}
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_${SCALA_VERSION}:${SPARK_VERSION}
+      - --conf
+      - spark.jars.ivy=/tmp/ivy
+      - ${SPARK_JOBS_DIR}/${SPARK_Q3_JOB}
     depends_on:
       kafka-init:
         condition: service_completed_successfully

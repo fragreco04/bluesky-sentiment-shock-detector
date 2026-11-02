@@ -20,29 +20,14 @@ _cache: dict = {}
 
 EXPECTED_LABELS = {"negative", "neutral", "positive"}
 
-
-# ---------------------------------------------------------------------------
-# Normalizzazione del testo prima dell'inferenza
-# La model card chiede menzioni -> "@user" e link -> "http", come nei tweet di
-# addestramento. Su Bluesky pero':
-#   - le menzioni sono handle-dominio (@nome.bsky.social), spesso attaccate a
-#     punteggiatura o a capo, quindi lo split sugli spazi della model card non basta;
-#   - i link nel testo sono spesso accorciati e SENZA schema
-#     ("github.com/apache/spark/pul..."), quindi "inizia con http" non li prende.
-# La normalizzazione serve solo al modello: `text` originale va in uscita intatto.
-# ---------------------------------------------------------------------------
-
-# @handle: non preceduta da lettera o @ (esclude le email), finisce su un carattere
-# di parola (il punto finale di una frase resta fuori)
+# Gestione delle menzioni: 'Ciao @ciccio' -> '@ciccio'
 _MENTION = re.compile(r"(?<![\w@])@\w(?:[\w.-]*\w)?")
 
-# Coda di un link: non ingloba la punteggiatura finale ma include i "..." del troncamento
+# Gestione degli URL: 'Ciao https://ciccio.it/c' -> 'https://ciccio.it/c'
 _TAIL = r"(?:[^\s<>\"']*[^\s<>\"'.,;:!?)\]}])?(?:\.\.\.|…)?"
-
-# Link con schema
 _URL_SCHEME = re.compile(r"(?i)\bhttps?://" + _TAIL)
 
-# Link senza schema. Per non scambiare "fine.Then" o "e.g." per un dominio,
+# Per non scambiare "fine.Then" o "e.g." per un dominio.
 # un dominio nudo viene riconosciuto solo se:
 #   1) ha un percorso (dominio/qualcosa), oppure
 #   2) inizia con www., oppure
@@ -61,26 +46,29 @@ _URL_BARE = re.compile(
 )
 
 
+# Restituisce il testo normalizzato
 def preprocess(text: str) -> str:
-    """Menzioni -> "@user", link (con o senza schema, anche accorciati) -> "http".
+    # Menzioni -> "@user", link (con o senza schema, anche accorciati) -> "http".
 
-    Esempi:
-      "Grande post di @nome.bsky.social, leggete!" -> "Grande post di @user, leggete!"
-      "Read this: github.com/apache/spark/pul... ok" -> "Read this: http ok"
-      "mail me at mario@example.com"                 -> invariato (le email non sono menzioni)
-    """
+    # Esempi:
+    # "Grande post di @nome.bsky.social, leggete!" -> "Grande post di @user, leggete!"
+    #  "Read this: github.com/apache/spark/pul... ok" -> "Read this: http ok"
+    #  "mail me at mario@example.com"                 -> invariato (le email non sono menzioni)
+
     if not text:
         return ""
+    
     text = _MENTION.sub("@user", text)      # prima le menzioni: "@nome.bsky.social" non e' un link
     text = _URL_SCHEME.sub("http", text)
     text = _URL_BARE.sub("http", text)
+
     return text
 
-
+# Restituisce (tokenizer, model, labels)
 def load(model_path: str, num_threads: int):
-    """Restituisce (tokenizer, model, labels); carica dal disco solo la prima volta."""
-    with _lock:
-        bundle = _cache.get(model_path)
+    with _lock:                             # Impedisce che i threads carichino il modello contemporaneamente
+        bundle = _cache.get(model_path)     # Cerca il modello in cache
+
         if bundle is None:
             import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -102,20 +90,15 @@ def load(model_path: str, num_threads: int):
                 raise ValueError(f"Etichette inattese nel modello {model_path}: {labels}")
 
             bundle = (tokenizer, model, labels)
-            _cache[model_path] = bundle
+            _cache[model_path] = bundle                 # Carichiamo il modello in cache, così non lo carichiamo dal disco ogni volta
+
         return bundle
 
-
-def score(
-    texts: Sequence[str],
-    model_path: str,
-    batch_size: int = 32,
-    max_length: int = 256,
-    num_threads: int = 1,
-) -> Tuple[List[float], List[str]]:
-    """Per ogni testo: sentiment = p_pos - p_neg in [-1, 1] e label con probabilita' massima."""
+# Restituiace il sentiment e la label.
+def score(texts: Sequence[str], model_path: str, batch_size: int = 32, max_length: int = 256, num_threads: int = 1,) -> Tuple[List[float], List[str]]:
     import torch
 
+    # Chiamata load()
     tokenizer, model, labels = load(model_path, num_threads)
     i_neg, i_pos = labels.index("negative"), labels.index("positive")
 

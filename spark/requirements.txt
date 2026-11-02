@@ -1,7 +1,3 @@
-# Dipendenze Python dell'immagine my_spark (driver, master, worker).
-# Versioni esatte: la stessa build produce sempre la stessa immagine.
-# Compatibili con il Python 3.10 di spark:4.0.1-...-python3-ubuntu (Ubuntu 22.04).
-#
 # torch viene installato dall'indice CPU di PyTorch (vedi Dockerfile): niente CUDA, ~5x piu' leggero.
 torch==2.9.1
 transformers==4.57.3

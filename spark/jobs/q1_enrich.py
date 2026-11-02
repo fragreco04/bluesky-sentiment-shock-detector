@@ -13,16 +13,6 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
-# ---------------------------------------------------------------------------
-# Configurazione
-# Viene letta sul DRIVER. I valori usati dentro la UDF viaggiano serializzati
-# insieme alla UDF: gli executor non vedono le variabili d'ambiente del driver.
-#
-# os.environ[...] (senza default) per tutto cio' che arriva dal .env tramite il
-# compose: c'e' una sola fonte del valore e, se manca, il job si ferma subito con
-# un KeyError invece di usare un valore che nessuno ha scelto.
-# os.getenv(..., default) solo per i parametri di tuning definiti esclusivamente qui.
-# ---------------------------------------------------------------------------
 # Dal .env, tramite il compose
 KAFKA_BOOTSTRAP_SERVERS = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
 INPUT_TOPIC = os.environ["INPUT_TOPIC"]
@@ -43,10 +33,6 @@ TORCH_THREADS = int(os.getenv("TORCH_THREADS", "1"))             # thread torch 
 
 CHECKPOINT = f"{CHECKPOINT_ROOT}/q1_enrich"
 
-# ---------------------------------------------------------------------------
-# Schemi
-# ---------------------------------------------------------------------------
-# `langs` e' nel messaggio ma non lo leggiamo: from_json ignora i campi non dichiarati.
 RAW_SCHEMA = StructType([
     StructField("uri", StringType(), True),
     StructField("did", StringType(), True),
@@ -58,9 +44,6 @@ RAW_SCHEMA = StructType([
     StructField("quoted_uri", StringType(), True),
 ])
 
-# nullable=True obbligatorio: Arrow restituisce sempre campi nullable e Spark 4 confronta
-# lo schema dichiarato con quello ricevuto, nullabilita' compresa. Con False ogni task fallisce
-# ("Invalid schema from arrow-enabled Python UDTF"). La UDF non produce comunque null.
 SENTIMENT_SCHEMA = StructType([
     StructField("sentiment", DoubleType(), True),
     StructField("sentiment_label", StringType(), True),
@@ -74,21 +57,20 @@ OUTPUT_FIELDS = [
 
 
 def event_time_col():
-    """Timestamp dell'evento da `time`, stringa ISO 8601 in UTC (es. "2026-08-13T06:47:43.959305Z").
-
-    Niente pattern esplicito: il parser di default di Spark gestisce la 'T', la 'Z' e da 0 a 6
-    cifre di frazione. Un pattern fisso con .SSSSSS fallirebbe se il producer omettesse la
-    frazione quando i microsecondi sono zero (come fa datetime.isoformat() di Python).
-    try_to_timestamp restituisce null invece di lanciare un errore (ANSI attivo di default in Spark 4):
-    le righe con `time` illeggibile vengono poi scartate dal filtro.
-    """
+    # Timestamp dell'evento da `time`, stringa ISO 8601 in UTC (es. "2026-08-13T06:47:43.959305Z").
+    #
+    # Utilizzando try_to_timestamp(), spark assegna null al valore contenuto in 'time' in caso la stringa non è leggibile
+    # Altrimenti, di default, Spark lancerebbe un errore
+    
     return F.try_to_timestamp(F.col("time"))
 
 
+# Factory: restituisce la UDF pronta all'uso, restituisce i valori che ci interessano nell'arricchimento
 def build_sentiment_udf():
-    @F.pandas_udf(SENTIMENT_SCHEMA)
-    def sentiment_udf(batches: Iterator[pd.Series]) -> Iterator[pd.DataFrame]:
-        import sentiment_model  # gira sull'executor; il file arriva con addPyFile
+    @F.pandas_udf(SENTIMENT_SCHEMA)             # Derocatore che trasforma una funzione python in una pandas UDF
+    def sentiment_udf(batches: Iterator[pd.Series]) -> Iterator[pd.DataFrame]:          # Riceve blocchi di righe
+        # importiamo sull'executor.
+        import sentiment_model
 
         for texts in batches:
             scores, labels = sentiment_model.score(
@@ -116,10 +98,11 @@ def main():
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    # Distribuisce il modulo del modello a tutti gli executor
+    # Il driver carica il modello sul suo contesto, e lo copia su tutti gli executor
     here = os.path.dirname(os.path.abspath(__file__))
     spark.sparkContext.addPyFile(os.path.join(here, "sentiment_model.py"))
 
+    # Chiama la factory e ottiene l'oggetto UDF
     sentiment_udf = build_sentiment_udf()
 
     # 1) Sorgente Kafka
@@ -133,30 +116,29 @@ def main():
         .load()
     )
 
-    # 2) Parsing: i messaggi illeggibili diventano righe con campi null e vengono scartati
+    # 2) Parsing dei messaggi
     parsed = (
         raw.select(F.from_json(F.col("value").cast("string"), RAW_SCHEMA).alias("p"))
         .select("p.*")
         .withColumn("event_ts", event_time_col())
-        .filter(
+        .filter(                                    # Scartiamo le righe con i campi null
             F.col("uri").isNotNull()
             & F.col("did").isNotNull()
             & F.col("event_ts").isNotNull()
         )
     )
 
-    # 3) Deduplica su uri. Il watermark limita lo stato: un uri viene ricordato per
-    #    DEDUP_WATERMARK; un duplicato che arriva dopo non viene piu' riconosciuto.
+    # 3) Deduplica su uri
     deduped = (
         parsed
         .withWatermark("event_ts", DEDUP_WATERMARK)
         .dropDuplicatesWithinWatermark(["uri"])
     )
 
-    # 4) Arricchimento: dopo la deduplica, cosi' non si fa inferenza due volte sullo stesso post
+    # 4) Arricchimento
     enriched = (
         deduped
-        .withColumn("s", sentiment_udf(F.col("text")))
+        .withColumn("s", sentiment_udf(F.col("text")))          # Calcolo colonna "s" che contiene (sentiment, sentiment_label)
         .select(
             "uri", "did", "time", "text",
             "link_title", "reply_parent_uri", "quoted_uri",
