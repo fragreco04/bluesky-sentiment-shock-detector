@@ -191,10 +191,10 @@ def detect(key: Tuple[str], pdf_iter: Iterator[pd.DataFrame], state: GroupState)
     if pdf.empty:
         return
 
-    # Spark non garantisce l'ordine delle righe dentro il gruppo.
-    # Le stringhe ISO a formato fisso si ordinano come i tempi che rappresentano.
+    # Ordiniamo le finestre, Spark non garantisce l'ordine delle righe dentro il gruppo.
     pdf = pdf.sort_values("window_start", kind="stable")
 
+    # Lo stato attuale lo carichiamo in un dizionario
     s = dict(zip(STATE_NAMES, state.get)) if state.exists else new_state()
     out = []
 
@@ -221,7 +221,7 @@ def detect(key: Tuple[str], pdf_iter: Iterator[pd.DataFrame], state: GroupState)
         after_gap = (not first) and ws != s["last_end"]
         if after_gap:
             gap = pd.Timestamp(ws) - pd.Timestamp(s["last_end"])
-            gap_windows = gap / (pd.Timestamp(we) - pd.Timestamp(ws))
+            gap_windows = gap / (pd.Timestamp(we) - pd.Timestamp(ws))               # Calcoliamo quanto è durato il gap
             # Un episodio non sopravvive a un buco lungo quanto la sua chiusura
             if s["ep_open"] and gap_windows >= CLOSE_AFTER:
                 close_episode("gap", ws)
@@ -277,7 +277,7 @@ def detect(key: Tuple[str], pdf_iter: Iterator[pd.DataFrame], state: GroupState)
             # Un episodio ha una sola direzione: un'anomalia opposta chiude e ne apre uno nuovo
             if s["ep_open"] and s["ep_direction"] != direction:
                 close_episode("reversal", ws)
-            if not s["ep_open"]:
+            if not s["ep_open"]:                    # Se è la prima finestra dell'episodio
                 s.update({
                     "ep_open": True,
                     "ep_id": f"shock-{ws}",    # deterministico: una rielaborazione produce lo stesso id
@@ -288,7 +288,7 @@ def detect(key: Tuple[str], pdf_iter: Iterator[pd.DataFrame], state: GroupState)
                     "ep_base_mean": base_mean, "ep_base_std": base_std,
                 })
                 emit("alert", ws, s["ep_id"], alert_message(s, model, "open"))
-            else:
+            else:                               # Se non è la prima finestra dell'episodio
                 s["ep_end"] = we
                 s["ep_streak"] = 0
                 s["ep_n_shock"] += 1
@@ -304,7 +304,7 @@ def detect(key: Tuple[str], pdf_iter: Iterator[pd.DataFrame], state: GroupState)
         # Le finestre scartate non contano ne' come anomale ne' come normali
         if active and not is_shock and s["ep_open"]:
             s["ep_streak"] += 1
-            if s["ep_streak"] >= CLOSE_AFTER:
+            if s["ep_streak"] >= CLOSE_AFTER:       # Chiusdi l'episodio dopo n finestre normali
                 close_episode("normal", ws)
 
         # 7) Aggiornamento della baseline, solo con finestre valide.
@@ -386,7 +386,7 @@ def main():
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    # 1) Sorgente Kafka: 1 partizione, finestre gia' in ordine di tempo
+    # 1) Sorgente Kafka
     raw = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
@@ -397,7 +397,7 @@ def main():
         .load()
     )
 
-    # 2) Parsing. Righe incomplete scartate; std e share possono essere null e passano invariati.
+    # 2) Parsing.
     parsed = (
         raw.select(F.from_json(F.col("value").cast("string"), SENTIMENT_SCHEMA).alias("p"))
         .select("p.*")
@@ -416,8 +416,8 @@ def main():
     #    arrivano finestre, quindi non serve un watermark.
     detected = (
         parsed
-        .groupBy("model")
-        .applyInPandasWithState(
+        .groupBy("model")                           # Raggruppiamo per modello.
+        .applyInPandasWithState(                    # A ogni micro-batch, chiama la funzione detect
             detect,
             outputStructType=OUTPUT_SCHEMA,
             stateStructType=STATE_SCHEMA,

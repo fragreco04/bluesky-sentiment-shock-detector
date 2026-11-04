@@ -41,7 +41,8 @@ services:
       # Solo per test dal tuo PC; Non viene usata; BIND_ADDRESS=127.0.0.1 = non raggiungibile da altri in rete
       - "${BIND_ADDRESS}:${LOGSTASH_PORT}:${LOGSTASH_PORT}"
     volumes:
-      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro       # ro: read-only
+      - ./logstash/ingest/pipeline:/usr/share/logstash/pipeline:ro                           # ro: read-only
+      - ./logstash/ingest/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
     environment:
       LS_JAVA_OPTS: "-Xms${LOGSTASH_HEAP} -Xmx${LOGSTASH_HEAP}"     # heap Java limitato
       LOGSTASH_PORT: ${LOGSTASH_PORT}
@@ -283,6 +284,106 @@ services:
       kafka-init:
         condition: service_completed_successfully
 
+  # ---------------------------------------------------------------------------
+  #  Elastic: Elasticsearch (indici), es-init (template e ILM), logstash-indexer
+  #  (Kafka -> Elasticsearch), Kibana (grafici)
+  # ---------------------------------------------------------------------------
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION}
+    container_name: elasticsearch
+    restart: unless-stopped
+    ports:
+      # Per curl e per l'explainer se lo lanci dal PC; i container usano ${ES_HOST}:${ES_PORT}
+      - "${BIND_ADDRESS}:${ES_PORT}:${ES_PORT}"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data       # indici: sopravvivono a down/up, spariscono solo con down -v
+    environment:
+      discovery.type: single-node                   # un nodo solo: niente ricerca di altri nodi, niente bootstrap checks
+      cluster.name: ${ES_CLUSTER_NAME}
+      http.port: ${ES_PORT}
+      xpack.security.enabled: "false"               # niente TLS e password: porte solo su 127.0.0.1, progetto locale
+      xpack.ml.enabled: "false"                     # machine learning di Elastic: non serve, e avvia un processo nativo
+      ingest.geoip.downloader.enabled: "false"      # niente download del database GeoIP all'avvio
+      ES_JAVA_OPTS: "-Xms${ES_HEAP} -Xmx${ES_HEAP}"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      # Healthy quando il cluster e' almeno yellow (con 0 repliche e un nodo sara' green)
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:${ES_PORT}/_cluster/health?wait_for_status=yellow&timeout=5s' > /dev/null"]
+      start_period: 120s
+      start_interval: 5s      # frequenza durante lo start_period
+      interval: 5m            # frequenza dopo, quando ormai serve solo come indicatore
+      timeout: 10s
+      retries: 3
+
+  # Servizio che crea policy ILM, template e indici (come kafka-init per i topic)
+  es-init:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION}   # immagine gia' scaricata: ha bash e curl
+    container_name: es_init
+    restart: "no"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./elasticsearch/init:/init:ro
+    environment:
+      ES_HOST: ${ES_HOST}
+      ES_PORT: ${ES_PORT}
+      ES_INDEX_POSTS: ${ES_INDEX_POSTS}
+      ES_INDEX_MONITOR: ${ES_INDEX_MONITOR}
+      ES_INDEX_ALERTS: ${ES_INDEX_ALERTS}
+      ES_POSTS_RETENTION_DAYS: ${ES_POSTS_RETENTION_DAYS}
+    entrypoint: ["/bin/bash", "/init/es-init.sh"]
+
+  # Logstash separato da quello di ingestione: quello sta sul percorso caldo (producer -> Kafka)
+  # e non deve risentire di Elasticsearch lento o fermo. Stessa immagine, configurazione diversa.
+  logstash-indexer:
+    image: docker.elastic.co/logstash/logstash:${LOGSTASH_VERSION}
+    container_name: logstash_indexer
+    restart: unless-stopped
+    volumes:
+      - ./logstash/indexer/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/indexer/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro   # tre pipeline separate
+      - logstash-indexer-data:/usr/share/logstash/data      # code persistenti: sopravvivono al riavvio
+    environment:
+      LS_JAVA_OPTS: "-Xms${LOGSTASH_INDEXER_HEAP} -Xmx${LOGSTASH_INDEXER_HEAP}"
+      KAFKA_BOOTSTRAP_HOST: ${KAFKA_BOOTSTRAP_HOST}
+      KAFKA_INTERNAL_PORT: ${KAFKA_INTERNAL_PORT}
+      KAFKA_TOPIC_ENRICHED: ${KAFKA_TOPIC_ENRICHED}
+      KAFKA_TOPIC_ENRICHED_PARTITIONS: ${KAFKA_TOPIC_ENRICHED_PARTITIONS}   # nella pipeline: consumer_threads
+      KAFKA_TOPIC_MONITOR: ${KAFKA_TOPIC_MONITOR}
+      KAFKA_TOPIC_ALERTS: ${KAFKA_TOPIC_ALERTS}
+      KAFKA_TOPIC_ALERTS_EXPLAINED: ${KAFKA_TOPIC_ALERTS_EXPLAINED}
+      ES_HOST: ${ES_HOST}
+      ES_PORT: ${ES_PORT}
+      ES_INDEX_POSTS: ${ES_INDEX_POSTS}
+      ES_INDEX_MONITOR: ${ES_INDEX_MONITOR}
+      ES_INDEX_ALERTS: ${ES_INDEX_ALERTS}
+      ES_POSTS_RETENTION_DAYS: ${ES_POSTS_RETENTION_DAYS}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully    # i topic esistono
+      es-init:
+        condition: service_completed_successfully    # template pronti prima della prima scrittura
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION}
+    container_name: kibana
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS}:${KIBANA_PORT}:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: http://${ES_HOST}:${ES_PORT}
+      NODE_OPTIONS: "--max-old-space-size=${KIBANA_HEAP_MB}"   # heap di Node.js in MB
+      TELEMETRY_OPTIN: "false"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
 volumes:
   spark-checkpoints:
   kafka-data:
+  es-data:
+  logstash-indexer-data:

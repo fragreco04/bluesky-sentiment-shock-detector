@@ -21,7 +21,7 @@ MAX_OFFSETS_PER_TRIGGER = os.environ["MAX_OFFSETS_PER_TRIGGER"]
 TRIGGER_INTERVAL = os.environ["TRIGGER_INTERVAL"]
 WINDOW_DURATION = os.environ["WINDOW_DURATION"]            # "1 minute"
 WATERMARK_DELAY = os.environ["WATERMARK_DELAY"]            # "2 minutes": deve superare il disordine massimo dell'event time
-MAX_FUTURE_SKEW = os.environ["MAX_FUTURE_SKEW"]            # "1 minute": tolleranza per `time` nel futuro
+MAX_FUTURE_SKEW = os.environ["MAX_FUTURE_SKEW"]            # "1 minute": tolleranza per `time` nel futuro (DA RIVEDERE)
 SHUFFLE_PARTITIONS = os.environ["SHUFFLE_PARTITIONS"]      # fissato nel checkpoint
 CHECKPOINT_ROOT = os.environ["CHECKPOINT_ROOT"]
 
@@ -124,11 +124,7 @@ def main():
         .load()
     )
 
-    # 2) Parsing + event time. Righe incomplete scartate.
-    #    Il filtro sul futuro protegge il watermark: e' il MASSIMO event time visto meno il
-    #    ritardo, quindi un solo post con `time` nel futuro lo spingerebbe avanti e farebbe
-    #    scartare come "in ritardo" tutti i post normali. current_timestamp() in streaming e'
-    #    l'istante del micro-batch, salvato nel checkpoint: la rielaborazione e' deterministica.
+    # 2) Parsing. Righe incomplete scartate.
     parsed = (
         raw.select(F.from_json(F.col("value").cast("string"), ENRICHED_SCHEMA).alias("p"))
         .select("p.*")
@@ -145,9 +141,6 @@ def main():
     )
 
     # 3) Watermark + deduplica su uri.
-    #    Q1 scrive su Kafka at-least-once: un suo riavvio puo' riscrivere un intero micro-batch.
-    #    Le copie arrivano subito dopo gli originali, con lo stesso event time, quindi dentro
-    #    il watermark: la deduplica le riconosce e lo stato resta piccolo (pochi minuti di uri).
     deduped = (
         parsed
         .withWatermark("event_ts", WATERMARK_DELAY)

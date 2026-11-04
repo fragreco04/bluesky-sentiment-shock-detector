@@ -1,0 +1,51 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "refresh_interval": "5s",
+
+    "index.lifecycle.name": "posts-retention",
+    "index.lifecycle.parse_origination_date": true,
+
+    "analysis": {
+      "char_filter": {
+        "strip_urls": {
+          "type": "pattern_replace",
+          "pattern": "(?i)\\b(?:https?://|www\\.)\\S+",
+          "replacement": " "
+        }
+      },
+      "filter": {
+        "english_possessive_stemmer": { "type": "stemmer", "language": "possessive_english" },
+        "english_stop":               { "type": "stop",    "stopwords": "_english_" },
+        "english_stemmer":            { "type": "stemmer", "language": "english" }
+      },
+      "analyzer": {
+        "english_posts": {
+          "tokenizer": "standard",
+          "char_filter": ["strip_urls"],
+          "filter": ["english_possessive_stemmer", "lowercase", "english_stop", "english_stemmer"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": false,
+    "properties": {
+      "uri":              { "type": "keyword" },
+      "did":              { "type": "keyword" },
+      "time":             { "type": "date" },
+      "text":             { "type": "text", "analyzer": "english_posts" },
+      "link_title": {
+        "type": "text",
+        "analyzer": "english_posts",
+        "fields": { "keyword": { "type": "keyword", "ignore_above": 512 } }
+      },
+      "reply_parent_uri": { "type": "keyword" },
+      "quoted_uri":       { "type": "keyword" },
+      "sentiment":        { "type": "float" },
+      "sentiment_label":  { "type": "keyword" },
+      "model":            { "type": "keyword" }
+    }
+  }
+}

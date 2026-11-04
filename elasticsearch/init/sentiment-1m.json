@@ -1,0 +1,31 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "dynamic": false,
+    "properties": {
+      "window_start":    { "type": "date" },
+      "window_end":      { "type": "date" },
+      "n_posts":         { "type": "integer" },
+      "n_authors":       { "type": "integer" },
+      "author_ratio":    { "type": "double" },
+      "mean_sentiment":  { "type": "double" },
+      "std_sentiment":   { "type": "double" },
+      "share_negative":  { "type": "double" },
+      "share_positive":  { "type": "double" },
+      "model":           { "type": "keyword" },
+      "baseline_mean":   { "type": "double" },
+      "baseline_std":    { "type": "double" },
+      "z_sentiment":     { "type": "double" },
+      "baseline_volume": { "type": "double" },
+      "z_volume":        { "type": "double" },
+      "warmup":          { "type": "boolean" },
+      "is_shock":        { "type": "boolean" },
+      "volume_spike":    { "type": "boolean" },
+      "skip_reason":     { "type": "keyword" },
+      "alert_id":        { "type": "keyword" }
+    }
+  }
+}

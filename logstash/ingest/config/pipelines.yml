@@ -1,0 +1,6 @@
+# Logstash di ingestione: una sola pipeline, producer (TCP) -> posts.raw / posts.dlq.
+# Stesso comportamento del pipelines.yml di default dell'immagine (tutti i .conf della cartella
+# in un'unica pipeline), ma scritto qui: le due istanze di Logstash si configurano allo stesso modo.
+ 
+- pipeline.id: ingest
+  path.config: "/usr/share/logstash/pipeline/*.conf"

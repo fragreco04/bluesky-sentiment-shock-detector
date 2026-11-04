@@ -1,0 +1,35 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "dynamic": false,
+    "properties": {
+      "alert_id":            { "type": "keyword" },
+      "status":              { "type": "keyword" },
+      "start":               { "type": "date" },
+      "end":                 { "type": "date" },
+      "close_reason":        { "type": "keyword" },
+      "direction":           { "type": "keyword" },
+      "peak_z":              { "type": "double" },
+      "peak_window":         { "type": "date" },
+      "peak_mean_sentiment": { "type": "double" },
+      "peak_n_posts":        { "type": "integer" },
+      "z_volume":            { "type": "double" },
+      "baseline_mean":       { "type": "double" },
+      "baseline_std":        { "type": "double" },
+      "n_shock_windows":     { "type": "integer" },
+      "model":               { "type": "keyword" },
+      "params":              { "type": "object", "enabled": false },
+
+      "explanation":         { "type": "text", "analyzer": "english" },
+      "significant_terms":   { "type": "keyword" },
+      "top_referenced_uris": { "type": "keyword" },
+      "top_link_titles":     { "type": "keyword", "ignore_above": 512 },
+      "sample_uris":         { "type": "keyword" },
+      "llm_model":           { "type": "keyword" },
+      "generated_at":        { "type": "date" }
+    }
+  }
+}
