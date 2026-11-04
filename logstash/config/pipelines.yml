@@ -1,0 +1,51 @@
+# Un solo Logstash, quattro pipeline indipendenti nello stesso processo: ognuna ha la sua coda
+# e i suoi worker, quindi se una rallenta le altre non aspettano.
+#
+#   ingest      producer (TCP) -> posts.raw / posts.dlq        (percorso caldo)
+#   es-posts    posts.enriched    -> Elasticsearch, posts-AAAA.MM.GG
+#   es-monitor  sentiment.monitor -> Elasticsearch, sentiment-1m
+#   es-alerts   alerts (+ alerts.explained) -> Elasticsearch, alerts
+#
+# Perche' Elasticsearch lento o fermo non rallenta l'ingestione:
+# le tre pipeline es-* hanno code persistenti. Se Elasticsearch non risponde si riempie la
+# LORO coda su disco (e poi aspettano, Kafka tiene il resto); la pipeline ingest ha la sua coda
+# e i suoi worker e continua. L'unica risorsa condivisa e' l'heap della JVM.
+#
+# Senza questo file Logstash concatenerebbe tutti i .conf in UNA pipeline: ogni evento
+# passerebbe da tutti gli output e finirebbe ovunque.
+#
+# queue.type: persisted -> gli eventi letti da Kafka vengono scritti su disco prima di essere
+# elaborati. Il consumer Kafka fa il commit degli offset a tempo, non dopo l'indicizzazione:
+# con la coda in memoria un crash perderebbe gli eventi gia' committati e non ancora indicizzati.
+# Con la coda su disco si riparte da li': at-least-once, e le copie sovrascrivono lo stesso _id.
+#
+# ECS disabilitato nelle pipeline es-*: niente campi aggiunti da Logstash (event.original, ...),
+# i documenti contengono solo i campi dei messaggi.
+
+# Ingestione: stesse impostazioni di prima (default dell'immagine, coda in memoria).
+# Gli eventi arrivano via TCP, non da Kafka: una coda su disco qui non proteggerebbe nulla
+# che il producer non possa reinviare, e costerebbe I/O sul percorso caldo.
+- pipeline.id: ingest
+  path.config: "/usr/share/logstash/pipeline/ingest/*.conf"
+
+- pipeline.id: es-posts
+  path.config: "/usr/share/logstash/pipeline/indexer/es-posts.conf"
+  pipeline.workers: 2                 # l'ordine non conta: ogni post e' un documento a se'
+  pipeline.batch.size: 1000           # bulk request piu' grandi: meno richieste a Elasticsearch
+  pipeline.ecs_compatibility: disabled
+  queue.type: persisted
+  queue.max_bytes: 512mb              # ~1 milione di post: se Elasticsearch e' giu', poi si ferma e aspetta (Kafka tiene il resto)
+
+- pipeline.id: es-monitor
+  path.config: "/usr/share/logstash/pipeline/indexer/es-monitor.conf"
+  pipeline.workers: 1                 # una finestra al minuto: un worker avanza
+  pipeline.ecs_compatibility: disabled
+  queue.type: persisted
+  queue.max_bytes: 64mb
+
+- pipeline.id: es-alerts
+  path.config: "/usr/share/logstash/pipeline/indexer/es-alerts.conf"
+  pipeline.workers: 1                 # 1 worker = ordine garantito (pipeline.ordered: auto): open prima di closed
+  pipeline.ecs_compatibility: disabled
+  queue.type: persisted
+  queue.max_bytes: 64mb

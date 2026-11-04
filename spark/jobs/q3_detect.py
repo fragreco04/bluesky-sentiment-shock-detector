@@ -9,6 +9,9 @@ sentiment.1m (JSON) -> parsing -> stato per model (applyInPandasWithState):
 
 Il detector e' guidato solo dall'event time (window_start), mai dall'orologio:
 rielaborare lo stesso topic con gli stessi parametri produce esattamente gli stessi output.
+
+Gira nella stessa applicazione Spark di Q2 (q23_run.py), ma resta avviabile da sola con main().
+Le variabili hanno il prefisso Q3_ perche' i due job condividono lo stesso ambiente.
 """
 import json
 import math
@@ -23,16 +26,18 @@ from pyspark.sql.types import (
     BooleanType, DoubleType, LongType, StringType, StructField, StructType,
 )
 
-# Dal .env, tramite il compose
+# Dal .env, tramite il compose. Comuni a Q2 e Q3:
 KAFKA_BOOTSTRAP_SERVERS = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
-INPUT_TOPIC = os.environ["INPUT_TOPIC"]                    # sentiment.1m
-MONITOR_TOPIC = os.environ["MONITOR_TOPIC"]                # sentiment.monitor
-ALERTS_TOPIC = os.environ["ALERTS_TOPIC"]                  # alerts
-STARTING_OFFSETS = os.environ["STARTING_OFFSETS"]
-MAX_OFFSETS_PER_TRIGGER = os.environ["MAX_OFFSETS_PER_TRIGGER"]
-TRIGGER_INTERVAL = os.environ["TRIGGER_INTERVAL"]
-SHUFFLE_PARTITIONS = os.environ["SHUFFLE_PARTITIONS"]      # 1: c'e' una sola chiave (model); fissato nel checkpoint
 CHECKPOINT_ROOT = os.environ["CHECKPOINT_ROOT"]
+
+# Propri di Q3
+INPUT_TOPIC = os.environ["Q3_INPUT_TOPIC"]                    # sentiment.1m
+MONITOR_TOPIC = os.environ["Q3_MONITOR_TOPIC"]                # sentiment.monitor
+ALERTS_TOPIC = os.environ["Q3_ALERTS_TOPIC"]                  # alerts
+STARTING_OFFSETS = os.environ["Q3_STARTING_OFFSETS"]
+MAX_OFFSETS_PER_TRIGGER = os.environ["Q3_MAX_OFFSETS_PER_TRIGGER"]
+TRIGGER_INTERVAL = os.environ["Q3_TRIGGER_INTERVAL"]
+SHUFFLE_PARTITIONS = os.environ["Q3_SHUFFLE_PARTITIONS"]      # 1: c'e' una sola chiave (model); fissato nel checkpoint
 
 # Parametri del detector: definiti solo qui, sovrascrivibili da ambiente per gli esperimenti.
 # Valori provvisori, da calibrare su piu' giorni di sentiment.1m.
@@ -376,15 +381,11 @@ def write_batch_to_kafka(batch_df, batch_id):
         batch_df.unpersist()
 
 
-def main():
-    spark = (
-        SparkSession.builder
-        .appName("q3_detect")
-        .config("spark.sql.shuffle.partitions", SHUFFLE_PARTITIONS)
-        .config("spark.sql.session.timeZone", "UTC")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
+def start_query(spark):
+    """Avvia la query sulla sessione data e la restituisce (senza attenderla)."""
+    # Letto all'avvio della query: non tocca le altre query della sessione.
+    # Con un checkpoint esistente vale il valore salvato li'.
+    spark.conf.set("spark.sql.shuffle.partitions", SHUFFLE_PARTITIONS)
 
     # 1) Sorgente Kafka
     raw = (
@@ -436,7 +437,19 @@ def main():
         .foreachBatch(write_batch_to_kafka)
         .start()
     )
-    query.awaitTermination()
+    return query
+
+
+def main():
+    # Avvio standalone (senza Q2)
+    spark = (
+        SparkSession.builder
+        .appName("q3_detect")
+        .config("spark.sql.session.timeZone", "UTC")
+        .getOrCreate()
+    )
+    spark.sparkContext.setLogLevel("WARN")
+    start_query(spark).awaitTermination()
 
 
 if __name__ == "__main__":

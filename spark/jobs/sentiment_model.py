@@ -65,9 +65,10 @@ def preprocess(text: str) -> str:
     return text
 
 # Restituisce (tokenizer, model, labels)
-def load(model_path: str, num_threads: int):
+def load(model_path: str, num_threads: int, quantize: bool = False):
     with _lock:                             # Impedisce che i threads carichino il modello contemporaneamente
-        bundle = _cache.get(model_path)     # Cerca il modello in cache
+        key = (model_path, quantize)
+        bundle = _cache.get(key)            # Cerca il modello in cache
 
         if bundle is None:
             import torch
@@ -83,6 +84,15 @@ def load(model_path: str, num_threads: int):
             )
             model.eval()
 
+            # Quantizzazione dinamica int8 dei soli layer lineari (il grosso dei calcoli di RoBERTa):
+            # pesi in int8, attivazioni quantizzate al volo. Su CPU circa meta' della memoria e
+            # inferenza piu' veloce, con risultati leggermente diversi dal modello fp32.
+            # In torch 2.9 l'API puo' stampare un avviso di deprecazione: funziona comunque.
+            if quantize:
+                model = torch.ao.quantization.quantize_dynamic(
+                    model, {torch.nn.Linear}, dtype=torch.qint8
+                )
+
             # Le etichette si leggono dalla config del modello, non si assumono
             id2label = {int(k): str(v).lower() for k, v in model.config.id2label.items()}
             labels = [id2label[i] for i in range(len(id2label))]
@@ -90,16 +100,17 @@ def load(model_path: str, num_threads: int):
                 raise ValueError(f"Etichette inattese nel modello {model_path}: {labels}")
 
             bundle = (tokenizer, model, labels)
-            _cache[model_path] = bundle                 # Carichiamo il modello in cache, così non lo carichiamo dal disco ogni volta
+            _cache[key] = bundle                        # Carichiamo il modello in cache, così non lo carichiamo dal disco ogni volta
 
         return bundle
 
 # Restituiace il sentiment e la label.
-def score(texts: Sequence[str], model_path: str, batch_size: int = 32, max_length: int = 256, num_threads: int = 1,) -> Tuple[List[float], List[str]]:
+def score(texts: Sequence[str], model_path: str, batch_size: int = 32, max_length: int = 256, num_threads: int = 1,
+          quantize: bool = False) -> Tuple[List[float], List[str]]:
     import torch
 
     # Chiamata load()
-    tokenizer, model, labels = load(model_path, num_threads)
+    tokenizer, model, labels = load(model_path, num_threads, quantize)
     i_neg, i_pos = labels.index("negative"), labels.index("positive")
 
     clean = [preprocess(t or "") for t in texts]

@@ -30,6 +30,12 @@ MODEL_PATH = os.environ["SENTIMENT_MODEL_PATH"]
 INFER_BATCH_SIZE = int(os.getenv("INFER_BATCH_SIZE", "32"))
 INFER_MAX_LENGTH = int(os.getenv("INFER_MAX_LENGTH", "256"))
 TORCH_THREADS = int(os.getenv("TORCH_THREADS", "1"))             # thread torch per worker Python
+INFER_QUANTIZE = os.getenv("INFER_QUANTIZE", "false").strip().lower() in ("1", "true", "yes")
+
+# Il campo `model` dice con cosa e' stato calcolato il sentiment. Il modello quantizzato da'
+# valori leggermente diversi: con un'etichetta propria Q2 non lo mescola al fp32 nella stessa
+# finestra e Q3 gli costruisce una baseline separata.
+MODEL_LABEL = f"{MODEL_NAME}+int8" if INFER_QUANTIZE else MODEL_NAME
 
 CHECKPOINT = f"{CHECKPOINT_ROOT}/q1_enrich"
 
@@ -79,6 +85,7 @@ def build_sentiment_udf():
                 batch_size=INFER_BATCH_SIZE,
                 max_length=INFER_MAX_LENGTH,
                 num_threads=TORCH_THREADS,
+                quantize=INFER_QUANTIZE,
             )
             yield pd.DataFrame({"sentiment": scores, "sentiment_label": labels})
 
@@ -144,7 +151,7 @@ def main():
             "link_title", "reply_parent_uri", "quoted_uri",
             F.col("s.sentiment").alias("sentiment"),
             F.col("s.sentiment_label").alias("sentiment_label"),
-            F.lit(MODEL_NAME).alias("model"),
+            F.lit(MODEL_LABEL).alias("model"),
         )
     )
 

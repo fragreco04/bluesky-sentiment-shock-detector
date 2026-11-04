@@ -5,6 +5,9 @@ posts.enriched (JSON) -> parsing dei soli campi usati -> event time da `time`
                       -> watermark + deduplica su uri
                       -> finestre tumbling di WINDOW_DURATION (output append: ogni finestra esce una volta, definitiva)
                       -> sentiment.1m (JSON, key = window_start, 1 partizione, finestre in ordine di tempo)
+
+Gira nella stessa applicazione Spark di Q3 (q23_run.py), ma resta avviabile da sola con main().
+Le variabili hanno il prefisso Q2_ perche' i due job condividono lo stesso ambiente.
 """
 import os
 
@@ -13,17 +16,20 @@ from pyspark.sql import functions as F
 from pyspark.sql.streaming import StreamingQueryListener
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
+# Comuni a Q2 e Q3
 KAFKA_BOOTSTRAP_SERVERS = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
-INPUT_TOPIC = os.environ["INPUT_TOPIC"]                    # posts.enriched
-OUTPUT_TOPIC = os.environ["OUTPUT_TOPIC"]                  # sentiment.1m
-STARTING_OFFSETS = os.environ["STARTING_OFFSETS"]
-MAX_OFFSETS_PER_TRIGGER = os.environ["MAX_OFFSETS_PER_TRIGGER"]
-TRIGGER_INTERVAL = os.environ["TRIGGER_INTERVAL"]
-WINDOW_DURATION = os.environ["WINDOW_DURATION"]            # "1 minute"
-WATERMARK_DELAY = os.environ["WATERMARK_DELAY"]            # "2 minutes": deve superare il disordine massimo dell'event time
-MAX_FUTURE_SKEW = os.environ["MAX_FUTURE_SKEW"]            # "1 minute": tolleranza per `time` nel futuro (DA RIVEDERE)
-SHUFFLE_PARTITIONS = os.environ["SHUFFLE_PARTITIONS"]      # fissato nel checkpoint
 CHECKPOINT_ROOT = os.environ["CHECKPOINT_ROOT"]
+
+# Propri di Q2
+INPUT_TOPIC = os.environ["Q2_INPUT_TOPIC"]                    # posts.enriched
+OUTPUT_TOPIC = os.environ["Q2_OUTPUT_TOPIC"]                  # sentiment.1m
+STARTING_OFFSETS = os.environ["Q2_STARTING_OFFSETS"]
+MAX_OFFSETS_PER_TRIGGER = os.environ["Q2_MAX_OFFSETS_PER_TRIGGER"]
+TRIGGER_INTERVAL = os.environ["Q2_TRIGGER_INTERVAL"]
+WINDOW_DURATION = os.environ["Q2_WINDOW_DURATION"]            # "1 minute"
+WATERMARK_DELAY = os.environ["Q2_WATERMARK_DELAY"]            # "2 minutes": deve superare il disordine massimo dell'event time
+MAX_FUTURE_SKEW = os.environ["Q2_MAX_FUTURE_SKEW"]            # tolleranza per `time` nel futuro
+SHUFFLE_PARTITIONS = os.environ["Q2_SHUFFLE_PARTITIONS"]      # fissato nel checkpoint
 
 APPROX_DISTINCT_RSD = float(os.getenv("APPROX_DISTINCT_RSD", "0.02"))
 
@@ -61,6 +67,9 @@ class LateRowsLogger(StreamingQueryListener):
 
     def onQueryProgress(self, event):
         p = event.progress
+        # Il listener riceve gli eventi di tutte le query della sessione (anche di Q3)
+        if p.name != "q2_window":
+            return
         dropped = sum(op.numRowsDroppedByWatermark for op in p.stateOperators)
         if dropped:
             wm = p.eventTime.get("watermark")
@@ -102,15 +111,14 @@ def write_batch_to_kafka(batch_df, batch_id):
     )
 
 
-def main():
-    spark = (
-        SparkSession.builder
-        .appName("q2_window")
-        .config("spark.sql.shuffle.partitions", SHUFFLE_PARTITIONS)
-        .config("spark.sql.session.timeZone", "UTC")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
+def start_query(spark):
+    """Avvia la query sulla sessione data e la restituisce (senza attenderla).
+
+    La sessione deve avere spark.sql.session.timeZone = UTC (ISO_UTC usa la 'Z' letterale).
+    """
+    # Le shuffle partitions vengono lette all'avvio della query (la query clona la sessione):
+    # impostarle qui non tocca le altre query. Con un checkpoint esistente vale quello salvato.
+    spark.conf.set("spark.sql.shuffle.partitions", SHUFFLE_PARTITIONS)
     spark.streams.addListener(LateRowsLogger())
 
     # 1) Sorgente Kafka
@@ -186,7 +194,19 @@ def main():
         .foreachBatch(write_batch_to_kafka)
         .start()
     )
-    query.awaitTermination()
+    return query
+
+
+def main():
+    # Avvio standalone (senza Q3)
+    spark = (
+        SparkSession.builder
+        .appName("q2_window")
+        .config("spark.sql.session.timeZone", "UTC")
+        .getOrCreate()
+    )
+    spark.sparkContext.setLogLevel("WARN")
+    start_query(spark).awaitTermination()
 
 
 if __name__ == "__main__":
