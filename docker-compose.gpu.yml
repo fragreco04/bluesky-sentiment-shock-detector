@@ -1,0 +1,14 @@
+# GPU integrata Intel per Q1 (OpenVINO, motori "ov:...@GPU"), su Windows con WSL2.
+#
+# Si aggiunge al compose principale tramite COMPOSE_FILE nel .env. Le liste (volumes, devices)
+# qui vengono AGGIUNTE a quelle del servizio, non le sostituiscono.
+# Su un PC senza /dev/dxg (Linux nativo, Mac, WSL senza GPU) togli il file da COMPOSE_FILE:
+# Q1 funziona uguale sulla CPU.
+services:
+  spark-driver-q1:
+    devices:
+      - /dev/dxg:/dev/dxg                 # canale WSL verso la GPU di Windows
+    volumes:
+      - /usr/lib/wsl:/usr/lib/wsl:ro      # librerie del driver Windows, usate dal runtime Intel
+    environment:
+      LD_LIBRARY_PATH: /usr/lib/wsl/lib   # dove il runtime OpenCL trova libdxcore

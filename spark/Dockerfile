@@ -4,6 +4,31 @@ FROM spark:${SPARK_VERSION}-scala${SCALA_VERSION}-java17-python3-ubuntu
 
 USER root
 
+# Runtime GPU Intel (OpenCL) per OpenVINO sulla GPU integrata. Stesse versioni dell'immagine
+# ufficiale openvino/ubuntu22_dev:2026.2.1, verificata su questo PC (Iris Xe, WSL2, Docker Desktop).
+# Senza GPU (o senza docker-compose.gpu.yml) questi pacchetti restano inutilizzati e non danno fastidio.
+ARG INTEL_IGC_VERSION=2.2.3
+ARG INTEL_IGC_BUILD=18220
+ARG INTEL_NEO_VERSION=24.48.31907.7
+ARG INTEL_GMM_VERSION=22.5.4
+ARG INTEL_NEO_SUMS=ww48.sum
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates wget; \
+    mkdir /tmp/neo; cd /tmp/neo; \
+    igc="https://github.com/intel/intel-graphics-compiler/releases/download/v${INTEL_IGC_VERSION}"; \
+    neo="https://github.com/intel/compute-runtime/releases/download/${INTEL_NEO_VERSION}"; \
+    wget -q "${igc}/intel-igc-core-2_${INTEL_IGC_VERSION}+${INTEL_IGC_BUILD}_amd64.deb" \
+            "${igc}/intel-igc-opencl-2_${INTEL_IGC_VERSION}+${INTEL_IGC_BUILD}_amd64.deb" \
+            "${neo}/intel-opencl-icd_${INTEL_NEO_VERSION}_amd64.deb" \
+            "${neo}/libigdgmm12_${INTEL_GMM_VERSION}_amd64.deb" \
+            "${neo}/${INTEL_NEO_SUMS}"; \
+    # Controllo d'integrita' dei pacchetti del runtime (le somme dell'IGC stanno nella sua release)
+    sha256sum -c --ignore-missing "${INTEL_NEO_SUMS}"; \
+    # apt installa i .deb locali e ne risolve le dipendenze (es. ocl-icd-libopencl1)
+    apt-get install -y --no-install-recommends ./*.deb; \
+    cd /; rm -rf /tmp/neo /var/lib/apt/lists/*
+
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
         "$(grep -E '^torch==' /tmp/requirements.txt | cut -d' ' -f1)" \

@@ -164,7 +164,8 @@ services:
   # Q1: arricchimento, local mode (driver ed executor nello stesso processo).
   # Su un solo PC il cluster standalone (master + worker + executor separato) costava tre JVM
   # senza aggiungere CPU ne' RAM. spark.task.cpus vale anche in local mode:
-  # local[4] con task da 2 -> 2 task in parallelo = 2 processi Python = 2 copie del modello.
+  # task paralleli = SPARK_Q1_CORES / SPARK_Q1_TASK_CPUS = processi Python = copie del modello.
+  # Con la GPU: local[4] e task da 4 -> un solo processo, che usa la GPU (docker-compose.gpu.yml).
   spark-driver-q1:
     <<: *spark-driver
     container_name: spark_q1
@@ -350,7 +351,13 @@ services:
 
 volumes:
   spark-checkpoints:
-  sentiment-ov:               # modelli OpenVINO (ov_export.py)
+  # Modelli OpenVINO (ov_export.py). Esterno: creato una volta a mano con
+  #   docker volume create sentiment-ov
+  # e mai cancellato dal compose, nemmeno da "docker compose down -v" (che cosi' azzera
+  # solo i dati: post, indici, checkpoint). Per cancellarlo: docker volume rm sentiment-ov
+  sentiment-ov:
+    external: true
+    name: sentiment-ov
   kafka-data:
   es-data:
   logstash-indexer-data:      # code persistenti delle pipeline es-* del servizio logstash

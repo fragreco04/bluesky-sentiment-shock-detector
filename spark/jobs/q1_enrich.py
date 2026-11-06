@@ -11,6 +11,7 @@ from typing import Iterator
 import pandas as pd
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.streaming import StreamingQueryListener
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
 import sentiment_model   # sta accanto a questo file; all'import non carica torch ne' il modello
@@ -102,6 +103,29 @@ def build_sentiment_udf():
     return sentiment_udf.asNondeterministic()
 
 
+class ProgressLogger(StreamingQueryListener):
+    # Una riga di log per micro-batch: quanti post, a che velocita' arrivano e a che velocita'
+    # vengono elaborati. Con batch pieni (righe = MAX_OFFSETS_PER_TRIGGER), "elab" e' la capacita'
+    # reale di Q1 dentro Spark; addBatch e' in pratica il tempo dell'inferenza.
+    #   docker logs -f spark_q1 2>&1 | grep progress
+    def onQueryStarted(self, event):
+        pass
+
+    def onQueryIdle(self, event):
+        pass
+
+    def onQueryTerminated(self, event):
+        pass
+
+    def onQueryProgress(self, event):
+        p = event.progress
+        d = p.durationMs or {}
+        print(f"[progress] batch={p.batchId} righe={p.numInputRows} "
+              f"in={p.inputRowsPerSecond:.1f}/s elab={p.processedRowsPerSecond:.1f}/s "
+              f"addBatch={d.get('addBatch', 0)}ms totale={d.get('triggerExecution', 0)}ms",
+              flush=True)
+
+
 def main():
     spark = (
         SparkSession.builder
@@ -114,6 +138,8 @@ def main():
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
+    spark.streams.addListener(ProgressLogger())
+    print(f"[q1] motore {INFER_ENGINE}, campo model = {MODEL_LABEL}", flush=True)
 
     # Rende sentiment_model.py importabile dai worker Python. Viaggia solo il modulo:
     # il modello lo carica ogni worker dal disco dell'immagine (SENTIMENT_MODEL_PATH)

@@ -295,7 +295,21 @@ def _pad_for_gpu(enc: dict, batch_size: int, pad_id: int) -> dict:
     return {"input_ids": ids, "attention_mask": mask}
 
 
-# Restituisce (tokenizer, run, labels, pad_per_gpu)
+def _warmup_gpu(run, batch_size: int, max_length: int, cls_id: int, pad_id: int):
+    # Compila subito tutte le forme che la GPU vedra' (una per bucket di lunghezza): senza,
+    # ogni forma nuova si compilerebbe a meta' lavoro, rallentando i primi micro-batch.
+    # Con CACHE_DIR i kernel finiscono su disco: dal secondo avvio e' quasi immediato.
+    import numpy as np
+
+    last = next((b for b in GPU_SEQ_BUCKETS if b >= max_length), max_length)
+    for length in [b for b in GPU_SEQ_BUCKETS if b <= last]:
+        ids = np.full((batch_size, length), pad_id, dtype=np.int64)
+        mask = np.zeros((batch_size, length), dtype=np.int64)
+        ids[:, 0], mask[:, 0] = cls_id, 1
+        run({"input_ids": ids, "attention_mask": mask})
+
+
+# Restituisce (tokenizer, run, labels, stato_gpu); stato_gpu e' None sulla CPU
 def load(model_path: str, num_threads: int, engine="torch", ov_dir: "str | None" = None):
     name = engine_name(engine)
     backend, variant, device = parse_engine(name)
@@ -319,7 +333,8 @@ def load(model_path: str, num_threads: int, engine="torch", ov_dir: "str | None"
             if set(labels) != EXPECTED_LABELS:
                 raise ValueError(f"Etichette inattese nel modello {model_path}: {labels}")
 
-            bundle = (tokenizer, run, labels, device == "GPU")
+            # Sulla GPU: insieme delle forme gia' compilate per (batch_size, max_length)
+            bundle = (tokenizer, run, labels, set() if device == "GPU" else None)
             _cache[key] = bundle                        # Carichiamo il modello in cache, così non lo carichiamo dal disco ogni volta
 
         return bundle
@@ -328,8 +343,14 @@ def load(model_path: str, num_threads: int, engine="torch", ov_dir: "str | None"
 # Restituisce il sentiment e la label.
 def score(texts: Sequence[str], model_path: str, batch_size: int = 32, max_length: int = 256, num_threads: int = 1,
           engine="torch", ov_dir: "str | None" = None) -> Tuple[List[float], List[str]]:
-    tokenizer, run, labels, pad_for_gpu = load(model_path, num_threads, engine, ov_dir)
+    tokenizer, run, labels, gpu_warm = load(model_path, num_threads, engine, ov_dir)
+    pad_for_gpu = gpu_warm is not None
     i_neg, i_pos = labels.index("negative"), labels.index("positive")
+    if pad_for_gpu and (batch_size, max_length) not in gpu_warm:
+        with _lock:
+            if (batch_size, max_length) not in gpu_warm:
+                _warmup_gpu(run, batch_size, max_length, tokenizer.cls_token_id, tokenizer.pad_token_id)
+                gpu_warm.add((batch_size, max_length))
 
     clean = [preprocess(t or "") for t in texts]
     n = len(clean)
