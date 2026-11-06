@@ -13,6 +13,8 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
+import sentiment_model   # sta accanto a questo file; all'import non carica torch ne' il modello
+
 # Dal .env, tramite il compose
 KAFKA_BOOTSTRAP_SERVERS = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
 INPUT_TOPIC = os.environ["INPUT_TOPIC"]
@@ -25,17 +27,20 @@ SHUFFLE_PARTITIONS = os.environ["SHUFFLE_PARTITIONS"]            # = core totali
 CHECKPOINT_ROOT = os.environ["CHECKPOINT_ROOT"]
 MODEL_NAME = os.environ["SENTIMENT_MODEL_NAME"]
 MODEL_PATH = os.environ["SENTIMENT_MODEL_PATH"]
+OV_DIR = os.environ["SENTIMENT_OV_DIR"]                          # modelli OpenVINO esportati da ov_export.py
 
-# Tuning dell'inferenza: definiti solo qui
-INFER_BATCH_SIZE = int(os.getenv("INFER_BATCH_SIZE", "32"))
-INFER_MAX_LENGTH = int(os.getenv("INFER_MAX_LENGTH", "256"))
-TORCH_THREADS = int(os.getenv("TORCH_THREADS", "1"))             # thread torch per worker Python
-INFER_QUANTIZE = os.getenv("INFER_QUANTIZE", "false").strip().lower() in ("1", "true", "yes")
+# Tuning dell'inferenza: dal .env, come gli altri parametri (se manca, il job non parte)
+INFER_BATCH_SIZE = int(os.environ["INFER_BATCH_SIZE"])           # testi per passata del modello
+INFER_MAX_LENGTH = int(os.environ["INFER_MAX_LENGTH"])           # token massimi per testo
+INFER_THREADS = int(os.environ["INFER_THREADS"])                 # thread di inferenza per worker Python
+# Motore: torch (PyTorch fp32), torch:<variante>, ov:<variante>[@GPU] (vedi sentiment_model).
+# Un valore sconosciuto, o un modello OpenVINO non esportato, ferma il job subito, sul driver.
+INFER_ENGINE = sentiment_model.check_engine(os.environ["INFER_ENGINE"], OV_DIR)
 
-# Il campo `model` dice con cosa e' stato calcolato il sentiment. Il modello quantizzato da'
-# valori leggermente diversi: con un'etichetta propria Q2 non lo mescola al fp32 nella stessa
-# finestra e Q3 gli costruisce una baseline separata.
-MODEL_LABEL = f"{MODEL_NAME}+int8" if INFER_QUANTIZE else MODEL_NAME
+# Il campo `model` dice con cosa e' stato calcolato il sentiment. Ogni motore diverso da
+# PyTorch fp32 da' valori diversi: con un'etichetta propria (es. "+ov:int8") Q2 non lo
+# mescola al fp32 nella stessa finestra e Q3 gli costruisce una baseline separata.
+MODEL_LABEL = MODEL_NAME if INFER_ENGINE == "torch" else f"{MODEL_NAME}+{INFER_ENGINE}"
 
 CHECKPOINT = f"{CHECKPOINT_ROOT}/q1_enrich"
 
@@ -73,7 +78,7 @@ def event_time_col():
 
 # Factory: restituisce la UDF pronta all'uso, restituisce i valori che ci interessano nell'arricchimento
 def build_sentiment_udf():
-    @F.pandas_udf(SENTIMENT_SCHEMA)             # Derocatore che trasforma una funzione python in una pandas UDF
+    @F.pandas_udf(SENTIMENT_SCHEMA)             # Decoratore che trasforma una funzione Python in una pandas UDF
     def sentiment_udf(batches: Iterator[pd.Series]) -> Iterator[pd.DataFrame]:          # Riceve blocchi di righe
         # importiamo sull'executor.
         import sentiment_model
@@ -84,12 +89,17 @@ def build_sentiment_udf():
                 MODEL_PATH,
                 batch_size=INFER_BATCH_SIZE,
                 max_length=INFER_MAX_LENGTH,
-                num_threads=TORCH_THREADS,
-                quantize=INFER_QUANTIZE,
+                num_threads=INFER_THREADS,
+                engine=INFER_ENGINE,
+                ov_dir=OV_DIR,
             )
             yield pd.DataFrame({"sentiment": scores, "sentiment_label": labels})
 
-    return sentiment_udf
+    # Non deterministica: l'ottimizzatore non puo' duplicarla. Senza, quando la struct
+    # restituita viene letta in due colonne (s.sentiment e s.sentiment_label), Spark
+    # potrebbe copiare la chiamata in entrambe ed eseguire l'inferenza due volte.
+    # Il risultato non cambia: cambia solo cio' che l'ottimizzatore puo' fare.
+    return sentiment_udf.asNondeterministic()
 
 
 def main():
@@ -105,7 +115,8 @@ def main():
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    # Il driver carica il modello sul suo contesto, e lo copia su tutti gli executor
+    # Rende sentiment_model.py importabile dai worker Python. Viaggia solo il modulo:
+    # il modello lo carica ogni worker dal disco dell'immagine (SENTIMENT_MODEL_PATH)
     here = os.path.dirname(os.path.abspath(__file__))
     spark.sparkContext.addPyFile(os.path.join(here, "sentiment_model.py"))
 

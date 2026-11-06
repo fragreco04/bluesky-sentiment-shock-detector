@@ -1,5 +1,10 @@
 # Ancore YAML: blocchi riusati con "<<: *nome" (merge superficiale: una chiave
 # ridefinita nel servizio sostituisce quella dell'ancora, non si fonde con essa).
+# Priorita' di CPU (cpu_shares): conta solo quando la CPU e' contesa. Un container con
+# peso 1024 (Q1, il default) contro uno con 256 riceve 4 volte tanto tempo di CPU;
+# quando c'e' CPU libera ognuno usa tutta quella che vuole. Cosi' Q1, il collo di
+# bottiglia, ha la precedenza senza rallentare l'avvio degli altri servizi.
+
 x-spark-image: &spark-image          # usata dai driver Spark (Q1 e Q2+Q3)
   build:
     context: ./spark
@@ -8,6 +13,7 @@ x-spark-image: &spark-image          # usata dai driver Spark (Q1 e Q2+Q3)
       SCALA_VERSION: ${SCALA_VERSION}
       SENTIMENT_MODEL_NAME: ${SENTIMENT_MODEL_NAME}
       SENTIMENT_MODEL_PATH: ${SENTIMENT_MODEL_PATH}
+      SENTIMENT_OV_DIR: ${SENTIMENT_OV_DIR}
       SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR}
   image: my_spark:${SPARK_VERSION}     # stessa immagine per entrambi i driver (stesso Python, stesso modello)
 
@@ -18,6 +24,7 @@ x-spark-driver: &spark-driver        # cio' che hanno in comune i due driver Spa
   volumes:
     - ./spark/jobs:${SPARK_JOBS_DIR}:ro
     - spark-checkpoints:${SPARK_CHECKPOINT_DIR}
+    - sentiment-ov:${SENTIMENT_OV_DIR}        # modelli OpenVINO: si esportano una volta, restano tra i riavvii
 
 services:
   producer:
@@ -39,6 +46,7 @@ services:
     image: docker.elastic.co/logstash/logstash:${LOGSTASH_VERSION}
     container_name: logstash
     restart: unless-stopped
+    cpu_shares: ${CPU_SHARES_BACKGROUND}
     ports:
       # Solo per test dal tuo PC; Non viene usata; BIND_ADDRESS=127.0.0.1 = non raggiungibile da altri in rete
       - "${BIND_ADDRESS}:${LOGSTASH_PORT}:${LOGSTASH_PORT}"
@@ -87,6 +95,7 @@ services:
     image: apache/kafka:${KAFKA_VERSION}
     container_name: kafka
     restart: unless-stopped
+    cpu_shares: ${CPU_SHARES_BACKGROUND}
     ports:
       - "${BIND_ADDRESS}:${KAFKA_EXTERNAL_PORT}:${KAFKA_EXTERNAL_PORT}"
     volumes:
@@ -159,6 +168,7 @@ services:
   spark-driver-q1:
     <<: *spark-driver
     container_name: spark_q1
+    cpu_shares: ${CPU_SHARES_Q1}
     ports:
       - "${BIND_ADDRESS}:${SPARK_Q1_UI_PORT}:4040"     # Spark UI (tab "Structured Streaming")
     environment:
@@ -170,9 +180,14 @@ services:
       TRIGGER_INTERVAL: ${SPARK_Q1_TRIGGER_INTERVAL}
       DEDUP_WATERMARK: ${SPARK_Q1_DEDUP_WATERMARK}
       SHUFFLE_PARTITIONS: ${SPARK_Q1_SHUFFLE_PARTITIONS}
-      TORCH_THREADS: ${SPARK_Q1_TORCH_THREADS}         # thread torch per processo Python
+      # Inferenza (letti da q1_enrich.py)
+      INFER_THREADS: ${SPARK_Q1_INFER_THREADS}         # thread di inferenza per processo Python
+      INFER_BATCH_SIZE: ${SPARK_Q1_INFER_BATCH_SIZE}
+      INFER_MAX_LENGTH: ${SPARK_Q1_INFER_MAX_LENGTH}
+      INFER_ENGINE: ${SPARK_Q1_INFER_ENGINE}
       SENTIMENT_MODEL_NAME: ${SENTIMENT_MODEL_NAME}
       SENTIMENT_MODEL_PATH: ${SENTIMENT_MODEL_PATH}
+      SENTIMENT_OV_DIR: ${SENTIMENT_OV_DIR}
       CHECKPOINT_ROOT: ${SPARK_CHECKPOINT_DIR}
       PYTHONUNBUFFERED: "1"
     command:
@@ -183,13 +198,23 @@ services:
       - ${SPARK_Q1_DRIVER_MEMORY}
       - --conf
       - spark.task.cpus=${SPARK_Q1_TASK_CPUS}    # core per task: task paralleli = copie del modello
+      # Ambiente dei worker Python. Va passato cosi' e non in environment: se
+      # spark.executorEnv.OMP_NUM_THREADS manca, Spark puo' sovrascrivere OMP_NUM_THREADS
+      # nei worker con i core dell'executor.
+      # Valgono gia' all'import di torch, prima di torch.set_num_threads.
+      - --conf
+      - spark.executorEnv.OMP_NUM_THREADS=${SPARK_Q1_INFER_THREADS}
+      - --conf
+      - spark.executorEnv.MKL_NUM_THREADS=${SPARK_Q1_INFER_THREADS}
+      - --conf
+      - spark.executorEnv.TOKENIZERS_PARALLELISM=false   # il tokenizer non apre un suo pool di thread
       - --packages                      # connettore Kafka, scaricato all'avvio da Maven Central
       - org.apache.spark:spark-sql-kafka-0-10_${SCALA_VERSION}:${SPARK_VERSION}
-      - --conf 
-      - spark.ui.retainedJobs=100 
-      - --conf 
+      - --conf
+      - spark.ui.retainedJobs=100
+      - --conf
       - spark.ui.retainedStages=100
-      - --conf 
+      - --conf
       - spark.sql.ui.retainedExecutions=50
       - --conf
       - spark.jars.ivy=/tmp/ivy         # cartella scrivibile per la cache dei jar (l'utente "spark" non ha una home)
@@ -198,11 +223,12 @@ services:
       kafka-init:
         condition: service_completed_successfully
 
-  # Q2 (finestre) + Q3 (detector): due query indipendenti nella stessa applicazione Spark,
-  # un solo driver in local mode. Ognuna ha il suo checkpoint, come quando erano separate.
+  # Q2 (finestre) + Q3 (detector): due query indipendenti nella stessa applicazione Spark
+  # (q23_run.py), un solo driver in local mode. Ognuna ha il suo checkpoint, come quando erano separate.
   spark-driver-q23:
     <<: *spark-driver
     container_name: spark_q23
+    cpu_shares: ${CPU_SHARES_BACKGROUND}
     ports:
       - "${BIND_ADDRESS}:${SPARK_Q23_UI_PORT}:4040"    # una sola Spark UI per entrambe le query
     environment:
@@ -236,11 +262,11 @@ services:
       - ${SPARK_Q23_DRIVER_MEMORY}
       - --packages
       - org.apache.spark:spark-sql-kafka-0-10_${SCALA_VERSION}:${SPARK_VERSION}
-      - --conf 
-      - spark.ui.retainedJobs=100 
-      - --conf 
+      - --conf
+      - spark.ui.retainedJobs=100
+      - --conf
       - spark.ui.retainedStages=100
-      - --conf 
+      - --conf
       - spark.sql.ui.retainedExecutions=50
       - --conf
       - spark.jars.ivy=/tmp/ivy
@@ -257,6 +283,7 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION}
     container_name: elasticsearch
     restart: unless-stopped
+    cpu_shares: ${CPU_SHARES_BACKGROUND}
     ports:
       # Per curl e per l'explainer se lo lanci dal PC; i container usano ${ES_HOST}:${ES_PORT}
       - "${BIND_ADDRESS}:${ES_PORT}:${ES_PORT}"
@@ -310,6 +337,7 @@ services:
     container_name: kibana
     profiles: ["ui"]
     restart: unless-stopped
+    cpu_shares: ${CPU_SHARES_BACKGROUND}
     ports:
       - "${BIND_ADDRESS}:${KIBANA_PORT}:5601"
     environment:
@@ -322,6 +350,7 @@ services:
 
 volumes:
   spark-checkpoints:
+  sentiment-ov:               # modelli OpenVINO (ov_export.py)
   kafka-data:
   es-data:
   logstash-indexer-data:      # code persistenti delle pipeline es-* del servizio logstash

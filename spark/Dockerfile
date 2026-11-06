@@ -11,12 +11,13 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 
 ARG SENTIMENT_MODEL_NAME
 ARG SENTIMENT_MODEL_PATH
+ARG SENTIMENT_OV_DIR
 ARG SPARK_CHECKPOINT_DIR
 
 # Se un valore manca nel .env la build si ferma, invece di partire con una stringa vuota.
 # Poi il modello viene scaricato UNA volta e finisce nell'immagine:
 # driver ed executor lo trovano gia' su disco, senza rete e senza download all'avvio.
-RUN for v in SENTIMENT_MODEL_NAME SENTIMENT_MODEL_PATH SPARK_CHECKPOINT_DIR; do \
+RUN for v in SENTIMENT_MODEL_NAME SENTIMENT_MODEL_PATH SENTIMENT_OV_DIR SPARK_CHECKPOINT_DIR; do \
         [ -n "$(printenv "$v")" ] || { echo "$v mancante nel .env" >&2; exit 1; }; \
     done; \
     python3 -c "from huggingface_hub import snapshot_download; \
@@ -24,7 +25,10 @@ snapshot_download(repo_id='${SENTIMENT_MODEL_NAME}', \
 local_dir='${SENTIMENT_MODEL_PATH}', \
 allow_patterns=['*.json', '*.txt', '*.bin', '*.safetensors'])" \
  && chmod -R a+rX "${SENTIMENT_MODEL_PATH}" \
- && mkdir -p "${SPARK_CHECKPOINT_DIR}" && chown -R spark:spark "${SPARK_CHECKPOINT_DIR}"
+ && mkdir -p "${SPARK_CHECKPOINT_DIR}" "${SENTIMENT_OV_DIR}" \
+ && chown -R spark:spark "${SPARK_CHECKPOINT_DIR}" "${SENTIMENT_OV_DIR}"
+# SENTIMENT_OV_DIR e' montato come volume: al primo avvio Docker lo crea con il proprietario
+# di questa cartella (spark), cosi' ov_export.py puo' scriverci senza permessi di root
 
 # A runtime nessuno deve contattare Hugging Face
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1

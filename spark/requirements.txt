@@ -4,3 +4,5 @@ transformers==4.57.3
 pandas==2.3.3          # pandas_udf; Spark 4.0 richiede pandas >= 2.0
 pyarrow==21.0.0        # pandas_udf; Spark 4.0 richiede pyarrow >= 11
 numpy==2.2.6           # ultima serie di numpy che supporta Python 3.10
+openvino==2026.4.0     # motore di inferenza Intel: CPU (AVX-512 VNNI) e GPU integrata
+nncf==3.4.0            # quantizzazione int8 dei modelli OpenVINO (ov_export.py); versione abbinata a openvino 2026.4
