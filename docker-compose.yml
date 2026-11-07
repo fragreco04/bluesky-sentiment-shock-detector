@@ -4,6 +4,37 @@
 # peso 1024 (Q1, il default) contro uno con 256 riceve 4 volte tanto tempo di CPU;
 # quando c'e' CPU libera ognuno usa tutta quella che vuole. Cosi' Q1, il collo di
 # bottiglia, ha la precedenza senza rallentare l'avvio degli altri servizi.
+#
+# Nel .env restano solo le manopole (versioni, memoria, core, motore di inferenza).
+# Tutto il resto (nomi di host, porte, topic, indici, percorsi, parametri di streaming)
+# e' scritto qui sotto, una volta sola dove possibile.
+
+# ---------------------------------------------------------------------------
+#  Costanti condivise (le chiavi x-* sono ignorate da Compose; servono solo le ancore)
+# ---------------------------------------------------------------------------
+x-costanti:
+  kafka-bootstrap: &kafka-bootstrap kafka:19092          # host:porta del listener INTERNAL di Kafka
+  checkpoint-dir: &checkpoint-dir /opt/spark/checkpoints # checkpoint dei driver (volume: funziona solo su un host)
+
+  # Topic Kafka. Se cambi un nome, aggiorna anche KAFKA_TOPICS in kafka-init.
+  topic-raw: &topic-raw posts.raw
+  topic-dlq: &topic-dlq posts.dlq
+  topic-enriched: &topic-enriched posts.enriched
+  topic-sentiment: &topic-sentiment sentiment.1m          # il suffisso segue Q2_WINDOW_DURATION: se cambi finestra, cambia anche il topic
+  topic-monitor: &topic-monitor sentiment.monitor
+  topic-alerts: &topic-alerts alerts
+  topic-alerts-explained: &topic-alerts-explained alerts.explained
+
+  # Indici Elasticsearch (usati da es-init e da Logstash)
+  index-posts: &index-posts posts                        # prefisso: un indice al giorno, posts-AAAA.MM.GG
+  index-monitor: &index-monitor sentiment-1m             # segue il topic del monitor
+  index-alerts: &index-alerts alerts
+  posts-retention-days: &posts-retention-days "3"        # = retention di posts.enriched (259200000 ms in KAFKA_TOPICS)
+
+  # Modello di sentiment (il nome finisce nel campo `model`, con "+int8" se quantizzato)
+  model-name: &model-name cardiffnlp/twitter-roberta-base-sentiment-latest
+  model-path: &model-path /opt/models/twitter-roberta-base-sentiment-latest   # dove il modello sta nell'immagine
+  ov-dir: &ov-dir /opt/models-ov                          # modelli OpenVINO esportati da ov_export.py (volume)
 
 x-spark-image: &spark-image          # usata dai driver Spark (Q1 e Q2+Q3)
   build:
@@ -11,20 +42,20 @@ x-spark-image: &spark-image          # usata dai driver Spark (Q1 e Q2+Q3)
     args:
       SPARK_VERSION: ${SPARK_VERSION}
       SCALA_VERSION: ${SCALA_VERSION}
-      SENTIMENT_MODEL_NAME: ${SENTIMENT_MODEL_NAME}
-      SENTIMENT_MODEL_PATH: ${SENTIMENT_MODEL_PATH}
-      SENTIMENT_OV_DIR: ${SENTIMENT_OV_DIR}
-      SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR}
+      SENTIMENT_MODEL_NAME: *model-name
+      SENTIMENT_MODEL_PATH: *model-path
+      SENTIMENT_OV_DIR: *ov-dir
+      SPARK_CHECKPOINT_DIR: *checkpoint-dir
   image: my_spark:${SPARK_VERSION}     # stessa immagine per entrambi i driver (stesso Python, stesso modello)
 
 x-spark-driver: &spark-driver        # cio' che hanno in comune i due driver Spark
   <<: *spark-image
   init: true
   restart: unless-stopped              # il checkpoint rende il riavvio sicuro: la query riprende dall'ultimo batch confermato
-  volumes:
-    - ./spark/jobs:${SPARK_JOBS_DIR}:ro
-    - spark-checkpoints:${SPARK_CHECKPOINT_DIR}
-    - sentiment-ov:${SENTIMENT_OV_DIR}        # modelli OpenVINO: si esportano una volta, restano tra i riavvii
+  volumes:                             # Q1 ridefinisce la lista per aggiungere le librerie WSL della GPU
+    - ./spark/jobs:/opt/spark/jobs:ro
+    - spark-checkpoints:/opt/spark/checkpoints
+    - sentiment-ov:/opt/models-ov      # modelli OpenVINO: si esportano una volta, restano tra i riavvii
 
 services:
   producer:
@@ -34,22 +65,23 @@ services:
     init: true
     environment:
       JETSTREAM_URL: ${JETSTREAM_URL}
-      LOGSTASH_HOST: ${LOGSTASH_HOST}
-      LOGSTASH_PORT: ${LOGSTASH_PORT}
+      LOGSTASH_HOST: logstash
+      LOGSTASH_PORT: 5000
     depends_on:
       logstash:
         condition: service_healthy    # parte solo quando Logstash accetta connessioni
 
   # Un solo Logstash per ingestione e indicizzazione: quattro pipeline indipendenti nello
   # stesso processo (vedi logstash/config/pipelines.yml). Una JVM in meno rispetto a due istanze.
+  # Le pipeline leggono le variabili d'ambiente qui sotto con ${NOME}: i nomi non vanno cambiati.
   logstash:
-    image: docker.elastic.co/logstash/logstash:${LOGSTASH_VERSION}
+    image: docker.elastic.co/logstash/logstash:${ELASTIC_VERSION}   # stessa versione di Elasticsearch e Kibana
     container_name: logstash
     restart: unless-stopped
-    cpu_shares: ${CPU_SHARES_BACKGROUND}
+    cpu_shares: 256
     ports:
       # Solo per test dal tuo PC; Non viene usata; BIND_ADDRESS=127.0.0.1 = non raggiungibile da altri in rete
-      - "${BIND_ADDRESS}:${LOGSTASH_PORT}:${LOGSTASH_PORT}"
+      - "${BIND_ADDRESS}:5000:5000"
     volumes:
       - ./logstash/ingest/pipeline:/usr/share/logstash/pipeline/ingest:ro       # ro: read-only
       - ./logstash/indexer/pipeline:/usr/share/logstash/pipeline/indexer:ro
@@ -60,26 +92,26 @@ services:
     environment:
       LS_JAVA_OPTS: "-Xms${LOGSTASH_HEAP} -Xmx${LOGSTASH_HEAP}"     # heap Java limitato
       # Ingestione
-      LOGSTASH_PORT: ${LOGSTASH_PORT}
-      KAFKA_BOOTSTRAP_HOST: ${KAFKA_BOOTSTRAP_HOST}   # nelle pipeline: bootstrap_servers => "${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}"
-      KAFKA_INTERNAL_PORT: ${KAFKA_INTERNAL_PORT}
-      KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW}
-      KAFKA_TOPIC_DLQ: ${KAFKA_TOPIC_DLQ}
+      LOGSTASH_PORT: 5000
+      KAFKA_BOOTSTRAP_HOST: kafka       # nelle pipeline: bootstrap_servers => "${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}"
+      KAFKA_INTERNAL_PORT: 19092
+      KAFKA_TOPIC_RAW: *topic-raw
+      KAFKA_TOPIC_DLQ: *topic-dlq
       # Indicizzazione
-      KAFKA_TOPIC_ENRICHED: ${KAFKA_TOPIC_ENRICHED}
-      KAFKA_TOPIC_ENRICHED_PARTITIONS: ${KAFKA_TOPIC_ENRICHED_PARTITIONS}   # in es-posts: consumer_threads
-      KAFKA_TOPIC_MONITOR: ${KAFKA_TOPIC_MONITOR}
-      KAFKA_TOPIC_ALERTS: ${KAFKA_TOPIC_ALERTS}
-      KAFKA_TOPIC_ALERTS_EXPLAINED: ${KAFKA_TOPIC_ALERTS_EXPLAINED}
-      ES_HOST: ${ES_HOST}
-      ES_PORT: ${ES_PORT}
-      ES_INDEX_POSTS: ${ES_INDEX_POSTS}
-      ES_INDEX_MONITOR: ${ES_INDEX_MONITOR}
-      ES_INDEX_ALERTS: ${ES_INDEX_ALERTS}
-      ES_POSTS_RETENTION_DAYS: ${ES_POSTS_RETENTION_DAYS}
+      KAFKA_TOPIC_ENRICHED: *topic-enriched
+      KAFKA_TOPIC_ENRICHED_PARTITIONS: 3   # in es-posts: consumer_threads (un consumer per partizione, come in KAFKA_TOPICS)
+      KAFKA_TOPIC_MONITOR: *topic-monitor
+      KAFKA_TOPIC_ALERTS: *topic-alerts
+      KAFKA_TOPIC_ALERTS_EXPLAINED: *topic-alerts-explained
+      ES_HOST: elasticsearch
+      ES_PORT: 9200
+      ES_INDEX_POSTS: *index-posts
+      ES_INDEX_MONITOR: *index-monitor
+      ES_INDEX_ALERTS: *index-alerts
+      ES_POSTS_RETENTION_DAYS: *posts-retention-days
     healthcheck:
       # Healthy quando la porta dell'input TCP è in ascolto
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/${LOGSTASH_PORT}'"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/5000'"]
       start_period: 120s      # Logstash impiega parecchio ad avviarsi: deve bastare anche nel caso peggiore
       start_interval: 5s      # frequenza durante lo start_period
       interval: 5m            # frequenza dopo, quando ormai serve solo come indicatore
@@ -95,17 +127,18 @@ services:
     image: apache/kafka:${KAFKA_VERSION}
     container_name: kafka
     restart: unless-stopped
-    cpu_shares: ${CPU_SHARES_BACKGROUND}
+    cpu_shares: 256
     ports:
-      - "${BIND_ADDRESS}:${KAFKA_EXTERNAL_PORT}:${KAFKA_EXTERNAL_PORT}"
+      - "${BIND_ADDRESS}:9092:9092"           # listener EXTERNAL, per i client sull'host (localhost)
     volumes:
       - kafka-data:/var/lib/kafka/data        # dati dei topic: sopravvivono a down/up, spariscono solo con down -v
     environment:
-      KAFKA_NODE_ID: ${KAFKA_NODE_ID}
+      # Listener: INTERNAL 19092 (rete docker), EXTERNAL 9092 (host), CONTROLLER 9093 (KRaft)
+      KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: ${KAFKA_NODE_ID}@${KAFKA_BOOTSTRAP_HOST}:${KAFKA_CONTROLLER_PORT}
-      KAFKA_LISTENERS: INTERNAL://:${KAFKA_INTERNAL_PORT},EXTERNAL://:${KAFKA_EXTERNAL_PORT},CONTROLLER://:${KAFKA_CONTROLLER_PORT}
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT},EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT}   # dice ai client dove connettersi
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:9092   # dice ai client dove connettersi
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
@@ -114,12 +147,13 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
 
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      KAFKA_LOG_RETENTION_HOURS: ${KAFKA_LOG_RETENTION_HOURS}   # dati più vecchi cancellabili
-      KAFKA_LOG_SEGMENT_BYTES: ${KAFKA_LOG_SEGMENT_BYTES}       # segmenti piccoli: si chiudono prima e la retention funziona
+      KAFKA_LOG_RETENTION_HOURS: 24           # default del broker: NON vale per i nostri topic, che hanno ognuno la sua
+                                              # retention (in KAFKA_TOPICS, impostata da kafka-init)
+      KAFKA_LOG_SEGMENT_BYTES: 134217728      # 128 MB: segmenti piccoli, si chiudono prima e la retention funziona
       KAFKA_HEAP_OPTS: "-Xms${KAFKA_HEAP} -Xmx${KAFKA_HEAP}"
       KAFKA_LOG_DIRS: /var/lib/kafka/data     # dove Kafka scrive i dati: esplicito, non il default dell'immagine
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT} > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:19092 > /dev/null 2>&1"]
       start_period: 60s
       start_interval: 5s      # frequenza durante lo start_period
       interval: 5m            # frequenza dopo, quando ormai serve solo come indicatore
@@ -135,8 +169,18 @@ services:
       kafka:
         condition: service_healthy
     environment:
-      KAFKA_TOPICS: ${KAFKA_TOPICS}
-      BOOTSTRAP: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
+      # Topic separati da spazio, formato nome:partizioni:retention_ms (-1 = nessuna scadenza).
+      # 259200000 ms = 3 giorni. Le partizioni valgono solo alla creazione: un topic esistente non viene modificato.
+      # I nomi devono coincidere con le costanti topic-* in cima al file.
+      KAFKA_TOPICS: >-
+        posts.raw:3:259200000
+        posts.dlq:1:259200000
+        posts.enriched:3:259200000
+        sentiment.1m:1:-1
+        sentiment.monitor:1:-1
+        alerts:1:-1
+        alerts.explained:1:-1
+      BOOTSTRAP: *kafka-bootstrap
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -161,35 +205,47 @@ services:
             --add-config retention.ms="$${retention}"
         done
 
-  # Q1: arricchimento, local mode (driver ed executor nello stesso processo).
+  # Q1: arricchimento, local mode (driver ed executor nello stesso processo), sulla GPU integrata
+  # Intel via WSL2 (OpenVINO, motori "ov:...@GPU").
   # Su un solo PC il cluster standalone (master + worker + executor separato) costava tre JVM
   # senza aggiungere CPU ne' RAM. spark.task.cpus vale anche in local mode:
   # task paralleli = SPARK_Q1_CORES / SPARK_Q1_TASK_CPUS = processi Python = copie del modello.
-  # Con la GPU: local[4] e task da 4 -> un solo processo, che usa la GPU (docker-compose.gpu.yml).
+  # Con la GPU: local[4] e task da 4 -> un solo processo, che usa la GPU.
   spark-driver-q1:
     <<: *spark-driver
     container_name: spark_q1
-    cpu_shares: ${CPU_SHARES_Q1}
+    cpu_shares: 1024
     ports:
-      - "${BIND_ADDRESS}:${SPARK_Q1_UI_PORT}:4040"     # Spark UI (tab "Structured Streaming")
+      - "${BIND_ADDRESS}:4040:4040"     # Spark UI (tab "Structured Streaming")
+    devices:
+      - /dev/dxg:/dev/dxg               # canale WSL verso la GPU di Windows (richiede WSL2 con GPU)
+    volumes:                            # sostituisce la lista dell'ancora: le prime tre sono le stesse
+      - ./spark/jobs:/opt/spark/jobs:ro
+      - spark-checkpoints:/opt/spark/checkpoints
+      - sentiment-ov:/opt/models-ov
+      - /usr/lib/wsl:/usr/lib/wsl:ro    # librerie del driver Windows, usate dal runtime Intel
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
-      INPUT_TOPIC: ${KAFKA_TOPIC_RAW}
-      OUTPUT_TOPIC: ${KAFKA_TOPIC_ENRICHED}
-      STARTING_OFFSETS: ${SPARK_Q1_STARTING_OFFSETS}
+      LD_LIBRARY_PATH: /usr/lib/wsl/lib # dove il runtime OpenCL trova libdxcore
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      INPUT_TOPIC: *topic-raw
+      OUTPUT_TOPIC: *topic-enriched
+      STARTING_OFFSETS: earliest
       MAX_OFFSETS_PER_TRIGGER: ${SPARK_Q1_MAX_OFFSETS_PER_TRIGGER}
-      TRIGGER_INTERVAL: ${SPARK_Q1_TRIGGER_INTERVAL}
-      DEDUP_WATERMARK: ${SPARK_Q1_DEDUP_WATERMARK}
-      SHUFFLE_PARTITIONS: ${SPARK_Q1_SHUFFLE_PARTITIONS}
+      TRIGGER_INTERVAL: "10 seconds"
+      DEDUP_WATERMARK: "10 minutes"     # per quanto un uri gia' visto viene ricordato. Non aggiunge latenza
+                                        # (la prima copia esce subito) e costa pochi MB di stato
+      SHUFFLE_PARTITIONS: 1             # partizioni della deduplica = task per micro-batch = task in parallelo (1 con la GPU).
+                                        # FISSATO NEL CHECKPOINT al primo avvio: un valore nuovo viene ignorato
+                                        # (senza errori) finche' il checkpoint di Q1 esiste, cioe' fino al prossimo down -v
       # Inferenza (letti da q1_enrich.py)
-      INFER_THREADS: ${SPARK_Q1_INFER_THREADS}         # thread di inferenza per processo Python
+      INFER_THREADS: ${SPARK_Q1_TASK_CPUS}   # thread di inferenza per processo Python = core del task
       INFER_BATCH_SIZE: ${SPARK_Q1_INFER_BATCH_SIZE}
-      INFER_MAX_LENGTH: ${SPARK_Q1_INFER_MAX_LENGTH}
+      INFER_MAX_LENGTH: 256             # token massimi per testo (un post Bluesky ne usa molti meno)
       INFER_ENGINE: ${SPARK_Q1_INFER_ENGINE}
-      SENTIMENT_MODEL_NAME: ${SENTIMENT_MODEL_NAME}
-      SENTIMENT_MODEL_PATH: ${SENTIMENT_MODEL_PATH}
-      SENTIMENT_OV_DIR: ${SENTIMENT_OV_DIR}
-      CHECKPOINT_ROOT: ${SPARK_CHECKPOINT_DIR}
+      SENTIMENT_MODEL_NAME: *model-name
+      SENTIMENT_MODEL_PATH: *model-path
+      SENTIMENT_OV_DIR: *ov-dir
+      CHECKPOINT_ROOT: *checkpoint-dir
       PYTHONUNBUFFERED: "1"
     command:
       - /opt/spark/bin/spark-submit     # e' il metodo ufficiale per avviare spark
@@ -204,9 +260,9 @@ services:
       # nei worker con i core dell'executor.
       # Valgono gia' all'import di torch, prima di torch.set_num_threads.
       - --conf
-      - spark.executorEnv.OMP_NUM_THREADS=${SPARK_Q1_INFER_THREADS}
+      - spark.executorEnv.OMP_NUM_THREADS=${SPARK_Q1_TASK_CPUS}
       - --conf
-      - spark.executorEnv.MKL_NUM_THREADS=${SPARK_Q1_INFER_THREADS}
+      - spark.executorEnv.MKL_NUM_THREADS=${SPARK_Q1_TASK_CPUS}
       - --conf
       - spark.executorEnv.TOKENIZERS_PARALLELISM=false   # il tokenizer non apre un suo pool di thread
       - --packages                      # connettore Kafka, scaricato all'avvio da Maven Central
@@ -219,7 +275,7 @@ services:
       - spark.sql.ui.retainedExecutions=50
       - --conf
       - spark.jars.ivy=/tmp/ivy         # cartella scrivibile per la cache dei jar (l'utente "spark" non ha una home)
-      - ${SPARK_JOBS_DIR}/${SPARK_Q1_JOB}   # il programma da eseguire
+      - /opt/spark/jobs/q1_enrich.py    # il programma da eseguire
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -229,31 +285,32 @@ services:
   spark-driver-q23:
     <<: *spark-driver
     container_name: spark_q23
-    cpu_shares: ${CPU_SHARES_BACKGROUND}
+    cpu_shares: 256
     ports:
-      - "${BIND_ADDRESS}:${SPARK_Q23_UI_PORT}:4040"    # una sola Spark UI per entrambe le query
+      - "${BIND_ADDRESS}:4041:4040"     # una sola Spark UI per entrambe le query (4040 sull'host e' di Q1)
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_HOST}:${KAFKA_INTERNAL_PORT}
-      CHECKPOINT_ROOT: ${SPARK_CHECKPOINT_DIR}
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      CHECKPOINT_ROOT: *checkpoint-dir
       PYTHONUNBUFFERED: "1"
-      # Q2
-      Q2_INPUT_TOPIC: ${KAFKA_TOPIC_ENRICHED}
-      Q2_OUTPUT_TOPIC: ${KAFKA_TOPIC_SENTIMENT}
-      Q2_STARTING_OFFSETS: ${SPARK_Q2_STARTING_OFFSETS}
-      Q2_MAX_OFFSETS_PER_TRIGGER: ${SPARK_Q2_MAX_OFFSETS_PER_TRIGGER}
-      Q2_TRIGGER_INTERVAL: ${SPARK_Q2_TRIGGER_INTERVAL}
-      Q2_WINDOW_DURATION: ${SPARK_Q2_WINDOW}
-      Q2_WATERMARK_DELAY: ${SPARK_Q2_WATERMARK}
-      Q2_MAX_FUTURE_SKEW: ${SPARK_Q2_MAX_FUTURE_SKEW}
-      Q2_SHUFFLE_PARTITIONS: ${SPARK_Q2_SHUFFLE_PARTITIONS}
-      # Q3
-      Q3_INPUT_TOPIC: ${KAFKA_TOPIC_SENTIMENT}
-      Q3_MONITOR_TOPIC: ${KAFKA_TOPIC_MONITOR}
-      Q3_ALERTS_TOPIC: ${KAFKA_TOPIC_ALERTS}
-      Q3_STARTING_OFFSETS: ${SPARK_Q3_STARTING_OFFSETS}
-      Q3_MAX_OFFSETS_PER_TRIGGER: ${SPARK_Q3_MAX_OFFSETS_PER_TRIGGER}
-      Q3_TRIGGER_INTERVAL: ${SPARK_Q3_TRIGGER_INTERVAL}
-      Q3_SHUFFLE_PARTITIONS: ${SPARK_Q3_SHUFFLE_PARTITIONS}
+      # Q2: finestre
+      Q2_INPUT_TOPIC: *topic-enriched
+      Q2_OUTPUT_TOPIC: *topic-sentiment
+      Q2_STARTING_OFFSETS: earliest     # al primo avvio ricostruisce lo storico dai 3 giorni di posts.enriched
+      Q2_MAX_OFFSETS_PER_TRIGGER: 20000 # evita il picco di memoria quando recupera l'arretrato
+      Q2_TRIGGER_INTERVAL: "10 seconds"
+      Q2_WINDOW_DURATION: "1 minute"    # tumbling; se cambia, cambia anche il nome del topic sentiment.*
+      Q2_WATERMARK_DELAY: "2 minutes"   # >= SPARK_Q1_MAX_OFFSETS_PER_TRIGGER / post al secondo nelle ore piu' calme, con margine
+      Q2_MAX_FUTURE_SKEW: "10 minutes"  # post con time oltre now + 10 minuti scartati: proteggono il watermark.
+                                        # Largo apposta: "now" e' l'orologio di WSL, che resta indietro dopo la sospensione del PC
+      Q2_SHUFFLE_PARTITIONS: 2          # una partizione di stato per core; fissato nel checkpoint
+      # Q3: detector
+      Q3_INPUT_TOPIC: *topic-sentiment
+      Q3_MONITOR_TOPIC: *topic-monitor
+      Q3_ALERTS_TOPIC: *topic-alerts
+      Q3_STARTING_OFFSETS: earliest     # al primo avvio costruisce la baseline da tutto lo storico di sentiment.1m
+      Q3_MAX_OFFSETS_PER_TRIGGER: 5000  # ~3,5 giorni di finestre per batch durante il recupero
+      Q3_TRIGGER_INTERVAL: "10 seconds"
+      Q3_SHUFFLE_PARTITIONS: 1          # una partizione di stato per l'unica chiave (model); fissato nel checkpoint
       # Per un esperimento sul detector: Q3_ALERTS_TOPIC e Q3_MONITOR_TOPIC dedicati, DET_K: "4", ecc.
     command:
       - /opt/spark/bin/spark-submit
@@ -271,7 +328,7 @@ services:
       - spark.sql.ui.retainedExecutions=50
       - --conf
       - spark.jars.ivy=/tmp/ivy
-      - ${SPARK_JOBS_DIR}/${SPARK_Q23_JOB}
+      - /opt/spark/jobs/q23_run.py
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -284,16 +341,16 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION}
     container_name: elasticsearch
     restart: unless-stopped
-    cpu_shares: ${CPU_SHARES_BACKGROUND}
+    cpu_shares: 256
     ports:
-      # Per curl e per l'explainer se lo lanci dal PC; i container usano ${ES_HOST}:${ES_PORT}
-      - "${BIND_ADDRESS}:${ES_PORT}:${ES_PORT}"
+      # Per curl e per l'explainer se lo lanci dal PC; i container usano elasticsearch:9200
+      - "${BIND_ADDRESS}:9200:9200"
     volumes:
       - es-data:/usr/share/elasticsearch/data       # indici: sopravvivono a down/up, spariscono solo con down -v
     environment:
       discovery.type: single-node                   # un nodo solo: niente ricerca di altri nodi, niente bootstrap checks
-      cluster.name: ${ES_CLUSTER_NAME}
-      http.port: ${ES_PORT}
+      cluster.name: bluesky-sentiment
+      http.port: 9200
       xpack.security.enabled: "false"               # niente TLS e password: porte solo su 127.0.0.1, progetto locale
       xpack.ml.enabled: "false"                     # machine learning di Elastic: non serve, e avvia un processo nativo
       ingest.geoip.downloader.enabled: "false"      # niente download del database GeoIP all'avvio
@@ -304,7 +361,7 @@ services:
         hard: 65536
     healthcheck:
       # Healthy quando il cluster e' almeno yellow (con 0 repliche e un nodo sara' green)
-      test: ["CMD-SHELL", "curl -fsS 'http://localhost:${ES_PORT}/_cluster/health?wait_for_status=yellow&timeout=5s' > /dev/null"]
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' > /dev/null"]
       start_period: 120s
       start_interval: 5s      # frequenza durante lo start_period
       interval: 5m            # frequenza dopo, quando ormai serve solo come indicatore
@@ -322,32 +379,48 @@ services:
     volumes:
       - ./elasticsearch/init:/init:ro
     environment:
-      ES_HOST: ${ES_HOST}
-      ES_PORT: ${ES_PORT}
-      ES_INDEX_POSTS: ${ES_INDEX_POSTS}
-      ES_INDEX_MONITOR: ${ES_INDEX_MONITOR}
-      ES_INDEX_ALERTS: ${ES_INDEX_ALERTS}
-      ES_POSTS_RETENTION_DAYS: ${ES_POSTS_RETENTION_DAYS}
+      ES_HOST: elasticsearch
+      ES_PORT: 9200
+      ES_INDEX_POSTS: *index-posts
+      ES_INDEX_MONITOR: *index-monitor
+      ES_INDEX_ALERTS: *index-alerts
+      ES_POSTS_RETENTION_DAYS: *posts-retention-days
     entrypoint: ["/bin/bash", "/init/es-init.sh"]
 
   # Kibana non parte con "docker compose up": serve solo per guardare i grafici.
-  #   avvio:   docker compose --profile ui up -d kibana
+  #   avvio:   docker compose --profile ui up -d       (Kibana + kibana-init, che importa le dashboard)
   #   arresto: docker compose stop kibana
   kibana:
     image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION}
     container_name: kibana
     profiles: ["ui"]
     restart: unless-stopped
-    cpu_shares: ${CPU_SHARES_BACKGROUND}
+    cpu_shares: 256
     ports:
-      - "${BIND_ADDRESS}:${KIBANA_PORT}:5601"
+      - "${BIND_ADDRESS}:5601:5601"
     environment:
-      ELASTICSEARCH_HOSTS: http://${ES_HOST}:${ES_PORT}
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
       NODE_OPTIONS: "--max-old-space-size=${KIBANA_HEAP_MB}"   # heap di Node.js in MB
       TELEMETRY_OPTIN: "false"
     depends_on:
       elasticsearch:
         condition: service_healthy
+
+  # Importa in Kibana data view e dashboard (kibana/dashboards.ndjson), come es-init per gli indici.
+  # Aspetta da solo che Kibana risponda, poi termina.
+  kibana-init:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION}   # immagine gia' scaricata: ha bash e curl
+    container_name: kibana_init
+    profiles: ["ui"]
+    restart: "no"
+    depends_on:
+      kibana:
+        condition: service_started
+    volumes:
+      - ./kibana:/init:ro
+    environment:
+      KIBANA_URL: http://kibana:5601
+    entrypoint: ["/bin/bash", "/init/kibana-init.sh"]
 
 volumes:
   spark-checkpoints:

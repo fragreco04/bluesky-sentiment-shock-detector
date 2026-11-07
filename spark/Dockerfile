@@ -4,9 +4,9 @@ FROM spark:${SPARK_VERSION}-scala${SCALA_VERSION}-java17-python3-ubuntu
 
 USER root
 
-# Runtime GPU Intel (OpenCL) per OpenVINO sulla GPU integrata. Stesse versioni dell'immagine
-# ufficiale openvino/ubuntu22_dev:2026.2.1, verificata su questo PC (Iris Xe, WSL2, Docker Desktop).
-# Senza GPU (o senza docker-compose.gpu.yml) questi pacchetti restano inutilizzati e non danno fastidio.
+# Runtime GPU Intel (OpenCL) per OpenVINO sulla GPU integrata (Q1 usa "ov:...@GPU").
+# Stesse versioni dell'immagine ufficiale openvino/ubuntu22_dev:2026.2.1, verificata su questo
+# PC (Iris Xe, WSL2, Docker Desktop). wget serve solo a scaricare i pacchetti: si rimuove subito dopo.
 ARG INTEL_IGC_VERSION=2.2.3
 ARG INTEL_IGC_BUILD=18220
 ARG INTEL_NEO_VERSION=24.48.31907.7
@@ -27,8 +27,11 @@ RUN set -eu; \
     sha256sum -c --ignore-missing "${INTEL_NEO_SUMS}"; \
     # apt installa i .deb locali e ne risolve le dipendenze (es. ocl-icd-libopencl1)
     apt-get install -y --no-install-recommends ./*.deb; \
+    apt-get purge -y --auto-remove wget; \
     cd /; rm -rf /tmp/neo /var/lib/apt/lists/*
 
+# torch dall'indice CPU di PyTorch (niente CUDA). Serve a ov_export.py per convertire il modello
+# in OpenVINO; la pipeline sulla GPU usa solo OpenVINO e il tokenizer di transformers.
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
         "$(grep -E '^torch==' /tmp/requirements.txt | cut -d' ' -f1)" \
@@ -39,21 +42,22 @@ ARG SENTIMENT_MODEL_PATH
 ARG SENTIMENT_OV_DIR
 ARG SPARK_CHECKPOINT_DIR
 
-# Se un valore manca nel .env la build si ferma, invece di partire con una stringa vuota.
+# Se un build arg manca (li passa il compose) la build si ferma, invece di partire con una stringa vuota.
 # Poi il modello viene scaricato UNA volta e finisce nell'immagine:
 # driver ed executor lo trovano gia' su disco, senza rete e senza download all'avvio.
+# Solo i pesi PyTorch (.bin) e i file del tokenizer: niente tf_model.h5 ne' altri formati.
 RUN for v in SENTIMENT_MODEL_NAME SENTIMENT_MODEL_PATH SENTIMENT_OV_DIR SPARK_CHECKPOINT_DIR; do \
-        [ -n "$(printenv "$v")" ] || { echo "$v mancante nel .env" >&2; exit 1; }; \
+        [ -n "$(printenv "$v")" ] || { echo "build arg $v mancante" >&2; exit 1; }; \
     done; \
     python3 -c "from huggingface_hub import snapshot_download; \
 snapshot_download(repo_id='${SENTIMENT_MODEL_NAME}', \
 local_dir='${SENTIMENT_MODEL_PATH}', \
-allow_patterns=['*.json', '*.txt', '*.bin', '*.safetensors'])" \
+allow_patterns=['*.json', '*.txt', '*.bin'])" \
  && chmod -R a+rX "${SENTIMENT_MODEL_PATH}" \
  && mkdir -p "${SPARK_CHECKPOINT_DIR}" "${SENTIMENT_OV_DIR}" \
  && chown -R spark:spark "${SPARK_CHECKPOINT_DIR}" "${SENTIMENT_OV_DIR}"
-# SENTIMENT_OV_DIR e' montato come volume: al primo avvio Docker lo crea con il proprietario
-# di questa cartella (spark), cosi' ov_export.py puo' scriverci senza permessi di root
+# SPARK_CHECKPOINT_DIR e SENTIMENT_OV_DIR sono montati come volumi: al primo avvio Docker li crea
+# con il proprietario di queste cartelle (spark), cosi' Spark e ov_export.py ci scrivono senza root
 
 # A runtime nessuno deve contattare Hugging Face
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1

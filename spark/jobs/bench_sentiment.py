@@ -4,7 +4,7 @@ Benchmark del modello di sentiment, fuori da Spark, sui post veri di posts.raw.
 Misura:
   1. lunghezza dei testi in token: quanto lavoro fa il modello per ogni post;
   2. throughput (post/s) per ogni combinazione processi x thread e per ogni motore
-     (PyTorch fp32 e int8, OpenVINO fp32 e int8, su CPU o GPU).
+     (PyTorch, OpenVINO su CPU, OpenVINO su GPU; tutti con il modello fp32).
      E' lo stesso schema di Q1: ogni processo ha la sua copia del modello e usa
      sentiment_model.score(), cioe' lo stesso codice della pipeline;
   3. quanto ogni motore si discosta da PyTorch fp32 (il riferimento): etichette,
@@ -15,8 +15,8 @@ capacita' reale di Q1 sara' un po' piu' bassa del throughput trovato qui.
 
 Uso (dentro l'immagine Spark, con Q1 fermo):
   python3 bench_sentiment.py sample.jsonl --n 2000
-  python3 bench_sentiment.py sample.jsonl --configs 2x2 --engines torch,ov:fp32,ov:int8,ov:int8-nosq
-  python3 bench_sentiment.py sample.jsonl --configs 1x4 --engines torch,ov:fp32@GPU,ov:int8@GPU
+  python3 bench_sentiment.py sample.jsonl --configs 2x2 --engines torch,ov:fp32
+  python3 bench_sentiment.py sample.jsonl --configs 1x4 --engines torch,ov:fp32@GPU
 
 I motori OpenVINO usano i modelli esportati da ov_export.py in SENTIMENT_OV_DIR.
 """
@@ -170,7 +170,7 @@ def main():
     ap.add_argument("--n", type=int, default=2000, help="post da usare (default 2000)")
     ap.add_argument("--configs", default="1x4,2x2,4x1", help="processi x thread, separati da virgola")
     ap.add_argument("--batch-sizes", default="32")
-    ap.add_argument("--engines", "--modes", dest="engines", default="torch,ov:fp32,ov:int8",
+    ap.add_argument("--engines", "--modes", dest="engines", default="torch,ov:fp32,ov:fp32@GPU",
                     help="motori separati da virgola; torch (PyTorch fp32) e' sempre il riferimento")
     ap.add_argument("--max-length", type=int, default=int(os.getenv("INFER_MAX_LENGTH", "256")))
     ap.add_argument("--model-path", default=os.getenv("SENTIMENT_MODEL_PATH"))

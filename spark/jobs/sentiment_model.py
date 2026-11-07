@@ -14,11 +14,10 @@ I task in parallelo sono spark.cores / spark.task.cpus, e ognuno usa num_threads
 torch (= spark.task.cpus). La somma non deve superare i core fisici: i thread OpenMP di
 torch si aspettano a vicenda, e se uno viene sospeso dal sistema rallentano tutti.
 
-Motori di inferenza (parametro `engine`, dal .env: INFER_ENGINE):
-  "torch"                 PyTorch fp32: il riferimento
-  "torch:<variante>"      PyTorch con quantizzazione dinamica int8 (QUANT_MODES)
-  "ov:<variante>"         OpenVINO su CPU, con il modello esportato da ov_export.py (OV_VARIANTS)
-  "ov:<variante>@GPU"     OpenVINO sulla GPU integrata (serve /dev/dxg nel container)
+Motori di inferenza (parametro `engine`, dal .env: INFER_ENGINE), tutti sul modello fp32:
+  "torch"         PyTorch su CPU: il riferimento
+  "ov:fp32"       OpenVINO su CPU, con il modello esportato da ov_export.py
+  "ov:fp32@GPU"   OpenVINO sulla GPU integrata (serve /dev/dxg nel container)
 Il nome del motore finisce nel campo `model` dei post: motori diversi danno valori
 (anche di poco) diversi, e Q2/Q3 non li mescolano.
 """
@@ -34,32 +33,8 @@ _cache: dict = {}
 
 EXPECTED_LABELS = {"negative", "neutral", "positive"}
 
-# Varianti di quantizzazione dinamica int8 dei layer lineari.
-#   nome -> (pesi con una scala per canale?, layer da lasciare in fp32)
-# - per tensore: una sola scala per tutta la matrice dei pesi (il default di torch, il piu' grezzo);
-# - per canale: una scala per ogni riga della matrice, segue meglio pesi di ampiezza diversa;
-# - nohead: la testa di classificazione resta fp32 (decide direttamente l'etichetta, costa poco);
-# - noffn: restano fp32 anche i layer FFN di uscita (3072 -> 768), che ricevono le attivazioni
-#   con i valori estremi piu' marcati di RoBERTa: li' la quantizzazione perde di piu'.
-# Il nome della variante finisce nel campo `model` (es. "...latest+int8pc"):
-# varianti diverse danno valori diversi e Q2/Q3 le tengono separate.
-QUANT_MODES = {
-    "int8":          (False, ()),
-    "int8pc":        (True,  ()),
-    "int8pc-nohead": (True,  (r"^classifier\.",)),
-    "int8pc-noffn":  (True,  (r"^classifier\.", r"\.layer\.\d+\.output\.dense$")),
-}
-
-# Varianti OpenVINO: una cartella ciascuna in SENTIMENT_OV_DIR, create da ov_export.py
-#   fp32       stesso calcolo di PyTorch, con il motore ottimizzato di OpenVINO
-#   int8       quantizzazione statica NNCF per transformer, con SmoothQuant alpha 0.95
-#              (sposta i valori estremi delle attivazioni nei pesi, dove l'int8 li regge meglio)
-#   int8-sq75  SmoothQuant piu' leggero (alpha 0.75): meno valori spostati nei pesi
-#   int8-sq50  SmoothQuant ancora piu' leggero (alpha 0.50)
-#   int8-nosq  come int8 ma senza SmoothQuant: serve a misurare quanto aiuta
-#   int8-acc   NNCF riporta in fp32 i layer che peggiorano di piu' l'accordo col fp32,
-#              finche' la perdita resta entro la soglia data a ov_export.py
-OV_VARIANTS = ("fp32", "int8", "int8-sq75", "int8-sq50", "int8-nosq", "int8-acc")
+# Unica variante OpenVINO: la cartella creata da ov_export.py in SENTIMENT_OV_DIR
+OV_VARIANT = "fp32"
 OV_DEVICES = ("CPU", "GPU")
 # Sulla GPU le forme variabili costano: ogni nuova forma va compilata. Lunghezze arrotondate
 # a pochi valori fissi e batch sempre pieno -> poche forme, compilate una volta e messe in cache.
@@ -109,88 +84,45 @@ def preprocess(text: str) -> str:
 
     return text
 
-def quant_mode(value) -> "str | None":
-    # Normalizza INFER_QUANTIZE: None = modello fp32, altrimenti il nome di una variante.
-    # "true" resta valido e vuol dire "int8" (il comportamento precedente).
-    if value is None or value is False:
-        return None
-    if value is True:
-        return "int8"
-    v = str(value).strip().lower()
-    if v in ("", "false", "0", "no", "fp32", "none"):
-        return None
-    if v in ("true", "1", "yes"):
-        return "int8"
-    if v in QUANT_MODES:
-        return v
-    raise ValueError(f"Quantizzazione sconosciuta: {value!r}. Valori ammessi: false, {', '.join(QUANT_MODES)}")
-
-
-def parse_engine(spec) -> Tuple[str, "str | None", str]:
-    # "torch", "torch:int8pc", "ov:int8", "ov:fp32@GPU" -> (backend, variante, device)
+def parse_engine(spec) -> Tuple[str, str]:
+    # "torch", "ov:fp32", "ov:fp32@GPU" -> (backend, device). Tutti i motori usano il modello fp32.
     text = "" if spec is None else str(spec).strip()
-    if text.lower() in ("", "torch", "pytorch", "fp32", "false"):
-        return ("torch", None, "CPU")
+    if text.lower() in ("", "torch", "pytorch", "fp32", "torch:fp32"):
+        return ("torch", "CPU")
     backend, _, rest = text.partition(":")
     variant, _, device = rest.partition("@")
     backend, variant, device = backend.strip().lower(), variant.strip().lower(), device.strip().upper() or "CPU"
-    if backend in ("torch", "pytorch"):
-        if device != "CPU":
-            raise ValueError(f"Motore {spec!r}: PyTorch qui gira solo su CPU")
-        return ("torch", quant_mode(variant), "CPU")
-    if backend in ("ov", "openvino"):
-        variant = variant or "fp32"
-        if variant not in OV_VARIANTS:
-            raise ValueError(f"Motore {spec!r}: variante OpenVINO sconosciuta. Valori: {', '.join(OV_VARIANTS)}")
+    if backend in ("ov", "openvino") and variant in ("", OV_VARIANT):
         if device not in OV_DEVICES:
             raise ValueError(f"Motore {spec!r}: device sconosciuto. Valori: {', '.join(OV_DEVICES)}")
-        return ("ov", variant, device)
-    raise ValueError(f"Motore sconosciuto: {spec!r}. Esempi: torch, torch:int8pc, ov:fp32, ov:int8, ov:int8@GPU")
+        return ("ov", device)
+    raise ValueError(f"Motore sconosciuto: {spec!r}. Valori: torch, ov:fp32, ov:fp32@GPU")
 
 
 def engine_name(spec) -> str:
     # Forma canonica del motore: e' anche il suffisso del campo `model`
-    backend, variant, device = parse_engine(spec)
+    backend, device = parse_engine(spec)
     if backend == "torch":
-        return "torch" if variant is None else f"torch:{variant}"
-    return f"ov:{variant}" + ("" if device == "CPU" else f"@{device}")
+        return "torch"
+    return f"ov:{OV_VARIANT}" + ("" if device == "CPU" else f"@{device}")
 
 
-def ov_model_path(ov_dir: str, variant: str) -> str:
-    return os.path.join(ov_dir, variant, "model.xml")
+def ov_model_path(ov_dir: str) -> str:
+    return os.path.join(ov_dir, OV_VARIANT, "model.xml")
 
 
 def check_engine(spec, ov_dir: "str | None") -> str:
     # Da chiamare all'avvio (driver, benchmark): un motore OpenVINO senza modello esportato
     # deve fermare tutto subito, non al primo micro-batch dentro un worker Python.
     name = engine_name(spec)
-    backend, variant, _ = parse_engine(name)
+    backend, _ = parse_engine(name)
     if backend == "ov":
         if not ov_dir:
             raise ValueError("Motore OpenVINO senza SENTIMENT_OV_DIR")
-        path = ov_model_path(ov_dir, variant)
+        path = ov_model_path(ov_dir)
         if not os.path.exists(path):
-            raise FileNotFoundError(f"{path} non esiste: esporta prima la variante con ov_export.py")
+            raise FileNotFoundError(f"{path} non esiste: esporta prima il modello con ov_export.py")
     return name
-
-
-def _quantize(model, mode: str):
-    import torch
-    from torch.ao.quantization import (default_dynamic_qconfig, per_channel_dynamic_qconfig,
-                                       quantize_dynamic)
-
-    per_channel, skip = QUANT_MODES[mode]
-    qconfig = per_channel_dynamic_qconfig if per_channel else default_dynamic_qconfig
-    skip_re = [re.compile(p) for p in skip]
-    # Configurazione per nome di modulo: solo i Linear non esclusi vengono quantizzati
-    spec = {
-        name: qconfig
-        for name, module in model.named_modules()
-        if isinstance(module, torch.nn.Linear) and not any(r.search(name) for r in skip_re)
-    }
-    # inplace: i layer quantizzati sostituiscono quelli fp32, senza tenere in memoria
-    # una seconda copia del modello
-    return quantize_dynamic(model, qconfig_spec=spec, inplace=True)
 
 
 def _set_torch_threads(num_threads: int):
@@ -210,7 +142,7 @@ def _set_torch_threads(num_threads: int):
         pass
 
 
-def _load_torch(model_path: str, num_threads: int, variant):
+def _load_torch(model_path: str, num_threads: int):
     # Restituisce run(enc) -> probabilita' (numpy, righe = testi)
     import torch
     from transformers import AutoModelForSequenceClassification
@@ -221,12 +153,6 @@ def _load_torch(model_path: str, num_threads: int, variant):
     model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
     model.eval()
 
-    # Quantizzazione dinamica int8 dei layer lineari (il grosso dei calcoli di RoBERTa):
-    # pesi in int8, attivazioni quantizzate al volo. Su CPU piu' veloce, con risultati
-    # diversi dal fp32: quanto diversi dipende dalla variante (vedi QUANT_MODES).
-    # In torch 2.9 l'API puo' stampare un avviso di deprecazione: funziona comunque.
-    if variant:
-        model = _quantize(model, variant)
 
     def run(enc):
         with torch.inference_mode():
@@ -244,12 +170,12 @@ def _softmax(logits):
     return e / e.sum(axis=-1, keepdims=True)
 
 
-def _load_openvino(num_threads: int, variant: str, device: str, ov_dir: str):
+def _load_openvino(num_threads: int, device: str, ov_dir: str):
     import openvino as ov
 
-    path = ov_model_path(ov_dir, variant)
+    path = ov_model_path(ov_dir)
     if not os.path.exists(path):
-        raise FileNotFoundError(f"{path} non esiste: esporta prima la variante con ov_export.py")
+        raise FileNotFoundError(f"{path} non esiste: esporta prima il modello con ov_export.py")
 
     core = ov.Core()
     if device == "GPU":
@@ -312,7 +238,7 @@ def _warmup_gpu(run, batch_size: int, max_length: int, cls_id: int, pad_id: int)
 # Restituisce (tokenizer, run, labels, stato_gpu); stato_gpu e' None sulla CPU
 def load(model_path: str, num_threads: int, engine="torch", ov_dir: "str | None" = None):
     name = engine_name(engine)
-    backend, variant, device = parse_engine(name)
+    backend, device = parse_engine(name)
     with _lock:                             # Impedisce che i threads carichino il modello contemporaneamente
         key = (model_path, name, ov_dir)
         bundle = _cache.get(key)            # Cerca il modello in cache
@@ -322,9 +248,9 @@ def load(model_path: str, num_threads: int, engine="torch", ov_dir: "str | None"
 
             tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
             if backend == "torch":
-                run = _load_torch(model_path, num_threads, variant)
+                run = _load_torch(model_path, num_threads)
             else:
-                run = _load_openvino(num_threads, variant, device, ov_dir)
+                run = _load_openvino(num_threads, device, ov_dir)
 
             # Le etichette si leggono dalla config del modello, non si assumono
             config = AutoConfig.from_pretrained(model_path, local_files_only=True)

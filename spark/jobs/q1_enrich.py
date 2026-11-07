@@ -34,13 +34,13 @@ OV_DIR = os.environ["SENTIMENT_OV_DIR"]                          # modelli OpenV
 INFER_BATCH_SIZE = int(os.environ["INFER_BATCH_SIZE"])           # testi per passata del modello
 INFER_MAX_LENGTH = int(os.environ["INFER_MAX_LENGTH"])           # token massimi per testo
 INFER_THREADS = int(os.environ["INFER_THREADS"])                 # thread di inferenza per worker Python
-# Motore: torch (PyTorch fp32), torch:<variante>, ov:<variante>[@GPU] (vedi sentiment_model).
+# Motore: torch (PyTorch), ov:fp32 (OpenVINO su CPU), ov:fp32@GPU (vedi sentiment_model).
 # Un valore sconosciuto, o un modello OpenVINO non esportato, ferma il job subito, sul driver.
 INFER_ENGINE = sentiment_model.check_engine(os.environ["INFER_ENGINE"], OV_DIR)
 
 # Il campo `model` dice con cosa e' stato calcolato il sentiment. Ogni motore diverso da
-# PyTorch fp32 da' valori diversi: con un'etichetta propria (es. "+ov:int8") Q2 non lo
-# mescola al fp32 nella stessa finestra e Q3 gli costruisce una baseline separata.
+# PyTorch da' valori (di poco) diversi: con un'etichetta propria (es. "+ov:fp32@GPU") Q2 non lo
+# mescola agli altri nella stessa finestra e Q3 gli costruisce una baseline separata.
 MODEL_LABEL = MODEL_NAME if INFER_ENGINE == "torch" else f"{MODEL_NAME}+{INFER_ENGINE}"
 
 CHECKPOINT = f"{CHECKPOINT_ROOT}/q1_enrich"
