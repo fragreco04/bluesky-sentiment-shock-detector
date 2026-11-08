@@ -34,16 +34,44 @@ x-spark-driver: &spark-driver
     - spark-checkpoints:/opt/spark/checkpoints
     - sentiment-ov:/opt/models-ov      # modelli OpenVINO: si esportano una volta, restano tra i riavvii
 
+# Profili (quale producer parte):
+#   live  -> solo Bluesky      (default: COMPOSE_PROFILES=live nel .env)
+#   dev   -> solo sintetico    docker compose --profile dev up -d
+#   mix   -> entrambi          docker compose --profile mix up -d
+# Tutti gli altri servizi non hanno profilo e partono sempre.
+# Un --profile sulla riga di comando sostituisce COMPOSE_PROFILES del .env.
+
 services:
   producer:
     build: ./jetstream_producer
     container_name: jetstream_producer
+    profiles: [live, mix]
     restart: unless-stopped
     init: true
     environment:
       JETSTREAM_URL: ${JETSTREAM_URL}
       LOGSTASH_HOST: logstash
       LOGSTASH_PORT: 5000
+    depends_on:
+      logstash:
+        condition: service_healthy
+
+  # Producer sintetico di sviluppo: formato semplificato -> Logstash (porta 5001) -> posts.raw.
+  # Scenario in ./synthetic_producer/config/scenario.toml, riletto a caldo.
+  producer-synthetic:
+    build: ./synthetic_producer
+    container_name: synthetic_producer
+    profiles: [dev, mix]
+    restart: unless-stopped
+    init: true
+    volumes:
+      # Si monta la CARTELLA, non il file: molti editor salvano scrivendo un file nuovo e
+      # rinominandolo, e un bind mount di un singolo file resterebbe sulla versione vecchia.
+      - ./synthetic_producer/config:/config:ro
+    environment:
+      LOGSTASH_HOST: logstash
+      LOGSTASH_PORT: 5001
+      SCENARIO_FILE: /config/scenario.toml
     depends_on:
       logstash:
         condition: service_healthy
@@ -55,8 +83,10 @@ services:
     cpu_shares: 256
     ports:
       - "${BIND_ADDRESS}:5000:5000"
+      - "${BIND_ADDRESS}:5001:5001"     # ingestione sintetica (anche per prove a mano con nc)
     volumes:
       - ./logstash/ingest/pipeline:/usr/share/logstash/pipeline/ingest:ro
+      - ./logstash/synthetic/pipeline:/usr/share/logstash/pipeline/synthetic:ro
       - ./logstash/indexer/pipeline:/usr/share/logstash/pipeline/indexer:ro
       - ./logstash/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
       - logstash-indexer-data:/usr/share/logstash/data
@@ -64,6 +94,7 @@ services:
       LS_JAVA_OPTS: "-Xms${LOGSTASH_HEAP} -Xmx${LOGSTASH_HEAP}"
       # Ingestione
       LOGSTASH_PORT: 5000
+      LOGSTASH_SYNTHETIC_PORT: 5001
       KAFKA_BOOTSTRAP_HOST: kafka
       KAFKA_INTERNAL_PORT: 19092
       KAFKA_TOPIC_RAW: ${TOPIC_RAW}
@@ -282,6 +313,30 @@ services:
       - /opt/spark/jobs/q23_run.py
     depends_on:
       kafka-init:
+        condition: service_completed_successfully
+
+  # Explainer: a ogni alert chiuso raccoglie le evidenze dai post in Elasticsearch, chiede a Gemini
+  # una spiegazione e la scrive su alerts.explained (Logstash la aggiunge al documento dell'alert).
+  explainer:
+    build: ./explainer
+    container_name: explainer
+    restart: unless-stopped
+    init: true
+    cpu_shares: 128
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      ALERTS_TOPIC: ${TOPIC_ALERTS}
+      EXPLAINED_TOPIC: ${TOPIC_ALERTS_EXPLAINED}
+      ES_URL: http://elasticsearch:9200
+      ES_INDEX_POSTS: *index-posts
+      ES_INDEX_ALERTS: *index-alerts
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL}
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      es-init:
         condition: service_completed_successfully
 
   elasticsearch:

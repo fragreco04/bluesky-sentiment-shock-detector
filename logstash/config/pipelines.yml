@@ -1,7 +1,8 @@
-# Un solo Logstash, quattro pipeline indipendenti nello stesso processo: ognuna ha la sua coda
+# Un solo Logstash, cinque pipeline indipendenti nello stesso processo: ognuna ha la sua coda
 # e i suoi worker, quindi se una rallenta le altre non aspettano.
 #
-#   ingest      producer (TCP) -> posts.raw / posts.dlq        (percorso caldo)
+#   ingest            producer Bluesky (TCP 5000)   -> posts.raw / posts.dlq   (percorso caldo)
+#   ingest-synthetic  producer sintetico (TCP 5001) -> posts.raw / posts.dlq   (profilo dev)
 #   es-posts    posts.enriched    -> Elasticsearch, posts-AAAA.MM.GG
 #   es-monitor  sentiment.monitor -> Elasticsearch, sentiment-1m
 #   es-alerts   alerts (+ alerts.explained) -> Elasticsearch, alerts
@@ -27,6 +28,14 @@
 # che il producer non possa reinviare, e costerebbe I/O sul percorso caldo.
 - pipeline.id: ingest
   path.config: "/usr/share/logstash/pipeline/ingest/*.conf"
+
+# Ingestione sintetica: formato diverso, stessa uscita della pipeline ingest. Cartella propria:
+# se il .conf stesse in ingest/pipeline verrebbe concatenato a quello di Bluesky.
+# Resta sempre attiva, anche senza profilo dev: se nessuno si connette alla 5001 e' ferma
+# e non costa nulla. Un worker basta per qualche decina di post al secondo.
+- pipeline.id: ingest-synthetic
+  path.config: "/usr/share/logstash/pipeline/synthetic/*.conf"
+  pipeline.workers: 1
 
 - pipeline.id: es-posts
   path.config: "/usr/share/logstash/pipeline/indexer/es-posts.conf"

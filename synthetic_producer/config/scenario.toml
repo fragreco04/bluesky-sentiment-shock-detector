@@ -1,0 +1,116 @@
+# =============================================================================
+#  Scenario del producer sintetico (profilo "dev")
+#
+#  Questo e' l'UNICO file da toccare per gli esperimenti. Il producer lo rilegge da solo
+#  ogni 2 secondi: salvi e la modifica vale subito, senza riavviare nulla.
+#  Eccezione: la sezione [clock] si legge solo all'avvio
+#      docker compose restart producer-synthetic
+#
+#  Se salvi un valore sbagliato il producer non si ferma: stampa l'errore e continua con
+#  la configurazione precedente.
+#      docker logs -f synthetic_producer
+#
+#  I tempi (minuti, secondi) sono tempo degli EVENTI: con speedup = 1 coincidono con
+#  il tempo reale.
+#
+#  Soglie del detector da tenere a mente (q3_detect.py, default):
+#    DET_MIN_POSTS = 300      post per finestra, sotto -> low_volume
+#    DET_MIN_AUTHORS = 250    autori per finestra, sotto -> low_authors
+#    DET_R_MIN = 0.8          autori / post, sotto -> low_diversity
+#    DET_WARMUP_N = 40        finestre valide prima che il detector possa dare alert
+#    DET_CLOSE_AFTER = 5      finestre normali per chiudere un episodio
+#    DET_GAP_RESET_MINUTES=60 buco che azzera la baseline
+# =============================================================================
+
+[clock]
+# Letti solo all'avvio.
+seed = 42                    # stesso seed e stesso file -> stessa sequenza di post
+backfill_minutes = 0         # > 0: parte nel passato e recupera fino all'ora reale
+speedup = 1.0                # durante il backfill il tempo scorre speedup volte piu' veloce
+# Backfill = superare il warmup senza aspettare 40 minuti (es. 60 minuti con speedup 4:
+# recuperati in 60 / (4 - 1) = 20 minuti reali). Il tetto e' Q1: rate_per_minute * speedup / 60
+# deve restare sotto ~150 post/s. FUNZIONA SOLO CON CHECKPOINT VUOTI: se Q1 e Q2 hanno gia'
+# visto post recenti, il loro watermark e' all'ora attuale e scartano i post "vecchi".
+
+[traffic]
+rate_per_minute = 600        # post al minuto (media; gli arrivi sono casuali, alla Poisson)
+jitter_seconds = 3.0         # disordine normale di created_at: deve restare sotto il watermark di Q2 (2 min)
+paused = false               # true = nessun post: un buco nelle finestre (after_gap; oltre 60 min, nuovo warmup)
+
+[authors]
+pool_size = 8000             # autori diversi. Con 600 post/min: rapporto autori/post ~0.96.
+                             # Sotto ~1300 il rapporto scende sotto 0.8 (low_diversity).
+spam_share = 0.0             # quota di post scritti da pochi account bot (testo pubblicitario)
+spam_accounts = 5            # quanti account bot. spam_share = 0.25 -> rapporto ~0.74, low_diversity
+
+[sentiment]
+# Quote di post positivi, negativi e neutri fuori dagli shock (vengono normalizzate a somma 1).
+positive = 0.35
+negative = 0.25
+neutral = 0.40
+# Deriva lenta: sposta quota tra positivo e negativo con una sinusoide (0 = spenta).
+# Serve a verificare che la baseline EWMA segua un cambiamento graduale SENZA aprire episodi.
+drift_amplitude = 0.0        # es. 0.10
+drift_period_minutes = 240
+
+[shock]
+mode = "periodic"            # "off", "periodic" (calendario sotto) o "manual" (vedi active)
+first_after_minutes = 60     # primo shock: dopo il warmup del detector (40 finestre + margine)
+every_minutes = 30           # uno shock ogni ... minuti
+duration_minutes = 6         # durata di ogni shock
+ramp_minutes = 1             # salita e discesa graduali (0 = a gradino)
+direction = "negative"       # "negative", "positive" o "alternate"
+# Quota dei post NON nella direzione dello shock che passa nella direzione dello shock.
+# Con la miscela qui sopra, ordini di grandezza (z del detector, errore ~0.03 sulla media):
+#   0.30 -> shock evidente (|z| ~ 10)
+#   0.10 -> al limite di K = 3.5
+#   0.08 -> sotto K, sopra K_LOW = 2.5 (|z| ~ 3): diventa shock solo se confermato dal volume
+intensity = 0.30
+volume_factor = 1.0          # moltiplica il volume durante lo shock (2.0 -> z_volume ~ 14 > K_VOL)
+topic = "the payment outage" # argomento dei post dello shock (visibile in Kibana)
+topic_share = 0.7            # quota dei post dello shock che parla di topic
+active = false               # solo con mode = "manual": true = shock in corso, false = finito
+
+[content]
+reply_rate = 0.15            # post in risposta a un post recente   -> reply_parent_uri
+quote_rate = 0.05            # post che ne citano uno recente       -> quoted_uri
+link_rate = 0.10             # post con anteprima di un link        -> link_title
+mention_rate = 0.10          # "@user123.bsky.social" nel testo (preprocess -> "@user")
+url_in_text_rate = 0.05      # link nel testo, con o senza https:// (preprocess -> "http")
+language_variant_rate = 0.03 # language = "EN", "en,es"...: Logstash le normalizza
+
+[faults]
+# Dati che la pipeline deve scartare o correggere. Dove finiscono:
+duplicate_rate = 0.01        # stesso post reinviato -> deduplica su uri in Q1 e Q2
+non_english_rate = 0.03      # Logstash: synth_drop_non_inglese
+empty_text_rate = 0.01       # Logstash: synth_drop_senza_testo
+malformed_json_rate = 0.0    # Logstash -> posts.dlq, motivo json_non_valido
+invalid_rate = 0.0           # Logstash -> posts.dlq: id_non_valido, author_non_valido,
+                             # created_at_non_valido, content_mancante, content_troppo_lungo
+# Post in ritardo: oltre 120 s (watermark di Q2) vengono scartati da Q2, che li conta nei log:
+#   docker logs spark_q23 2>&1 | grep "in ritardo"
+late_rate = 0.0
+late_seconds_min = 150
+late_seconds_max = 300
+# Post nel futuro: Q2 scarta quelli oltre 10 minuti (Q2_MAX_FUTURE_SKEW).
+# ATTENZIONE: Q1 non ha questo filtro. Un solo post a +60 minuti sposta il watermark della
+# deduplica di Q1 in avanti di 60 minuti, e da quel momento Q1 scarta come "in ritardo" tutti
+# i post normali. E' un test utile proprio per vedere questo effetto.
+future_rate = 0.0
+future_minutes_min = 15
+future_minutes_max = 60
+
+# =============================================================================
+#  RICETTE (cambia solo le righe indicate)
+# =============================================================================
+#  Shock moderato confermato dal volume:  intensity = 0.08, volume_factor = 2.5
+#  Picco di volume senza shock:           intensity = 0.0,  volume_factor = 3.0  (solo volume_spike)
+#  Shock a comando:                       mode = "manual", poi active = true / false
+#  Inversione (reversal):                 direction = "alternate", every_minutes = 10, duration_minutes = 8
+#  Spam (low_diversity):                  spam_share = 0.25
+#  Volume troppo basso:                   rate_per_minute = 200
+#  Interruzione dell'ingestione:          paused = true per qualche minuto, poi false
+#  Baseline che deriva:                   drift_amplitude = 0.10, drift_period_minutes = 60
+#  Test della DLQ:                        malformed_json_rate = 0.01, invalid_rate = 0.02
+#  Dati in ritardo:                       late_rate = 0.05
+# =============================================================================

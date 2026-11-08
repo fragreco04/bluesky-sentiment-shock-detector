@@ -52,7 +52,7 @@ MIN_POSTS = int(os.getenv("DET_MIN_POSTS", "300"))             # errore di campi
 MIN_AUTHORS = int(os.getenv("DET_MIN_AUTHORS", "250"))
 R_MIN = float(os.getenv("DET_R_MIN", "0.8"))                   # n_authors / n_posts: normale ~0.9
 PARTIAL_RATIO = float(os.getenv("DET_PARTIAL_RATIO", "0.5"))   # sotto meta' del volume tipico: finestra incompleta
-WARMUP_N = int(os.getenv("DET_WARMUP_N", "100"))               # ~3/ALPHA finestre valide
+WARMUP_N = int(os.getenv("DET_WARMUP_N", "40"))                # > 1/ALPHA: a fine warmup il peso e' gia' ALPHA
 CLOSE_AFTER = int(os.getenv("DET_CLOSE_AFTER", "5"))           # finestre normali consecutive per chiudere un episodio
 GAP_RESET_MINUTES = float(os.getenv("DET_GAP_RESET_MINUTES", "60"))  # buco oltre il quale si rifa' il warmup
 
@@ -152,14 +152,14 @@ def sigma(var: float, floor: float) -> float:
     return max(math.sqrt(var), floor)
 
 
-def ewma(mu: float, var: float, x: float, clip: Optional[float]) -> Tuple[float, float]:
+def ewma(mu: float, var: float, x: float, clip: Optional[float], alpha: float = ALPHA) -> Tuple[float, float]:
     # delta calcolato con la media vecchia e usato in entrambe le formule.
-    # Winsorizzazione: con clip, un valore estremo sposta la baseline al massimo di ALPHA * clip,
+    # Winsorizzazione: con clip, un valore estremo sposta la baseline al massimo di alpha * clip,
     # cosi' uno shock non la contamina, ma un cambio di livello duraturo viene assorbito.
     d = x - mu
     if clip is not None:
         d = max(-clip, min(clip, d))
-    return mu + ALPHA * d, (1 - ALPHA) * (var + ALPHA * d * d)
+    return mu + alpha * d, (1 - alpha) * (var + alpha * d * d)
 
 
 def alert_message(s: dict, model: str, status: str, close_reason: Optional[str] = None) -> dict:
@@ -230,10 +230,12 @@ def detect(key: Tuple[str], pdf_iter: Iterator[pd.DataFrame], state: GroupState)
             # Un episodio non sopravvive a un buco lungo quanto la sua chiusura
             if s["ep_open"] and gap_windows >= CLOSE_AFTER:
                 close_episode("gap", ws)
-            # Dopo un buco lungo la baseline e' vecchia (altra fascia oraria): si rifa' il warmup,
-            # partendo da mu e var attuali invece che da zero
+            # Dopo un buco lungo la baseline e' vecchia (altra fascia oraria): si rifa' il warmup
+            # da zero. Tenere il vecchio volume tipico bloccherebbe tutto: se ora il volume e'
+            # meno della meta', ogni finestra risulterebbe "partial" e la baseline non si aggiornerebbe mai.
             if gap.total_seconds() / 60 >= GAP_RESET_MINUTES:
                 s["n_valid"] = 0
+                s["has_baseline"] = False
         s["last_start"], s["last_end"] = ws, we
 
         # 3) Baseline e z-score, calcolati con lo stato PRIMA dell'aggiornamento
@@ -253,8 +255,10 @@ def detect(key: Tuple[str], pdf_iter: Iterator[pd.DataFrame], state: GroupState)
             skip_reason = "startup"            # la prima finestra dopo l'avvio e' parziale
         elif after_gap:
             skip_reason = "after_gap"          # anche la prima dopo un buco
-        elif s["has_baseline"] and n_posts < PARTIAL_RATIO * base_vol:
-            skip_reason = "partial"            # es. l'ultima finestra prima di un'interruzione
+        elif s["n_valid"] >= WARMUP_N and n_posts < PARTIAL_RATIO * base_vol:
+            # es. l'ultima finestra prima di un'interruzione. Solo a warmup finito: prima il volume
+            # tipico non e' ancora affidabile, e scartare finestre gli impedirebbe di assestarsi.
+            skip_reason = "partial"
         elif n_posts < MIN_POSTS:
             skip_reason = "low_volume"         # media troppo rumorosa
         elif n_authors < MIN_AUTHORS:
@@ -309,19 +313,22 @@ def detect(key: Tuple[str], pdf_iter: Iterator[pd.DataFrame], state: GroupState)
         # Le finestre scartate non contano ne' come anomale ne' come normali
         if active and not is_shock and s["ep_open"]:
             s["ep_streak"] += 1
-            if s["ep_streak"] >= CLOSE_AFTER:       # Chiusdi l'episodio dopo n finestre normali
+            if s["ep_streak"] >= CLOSE_AFTER:       # Chiude l'episodio dopo n finestre normali
                 close_episode("normal", ws)
 
         # 7) Aggiornamento della baseline, solo con finestre valide.
         #    Nel warmup niente winsorizzazione: la varianza parte da 0 e taglierebbe tutto.
+        #    Nel warmup il peso e' 1/n (media e varianza esatte delle finestre viste finora) finche'
+        #    non scende ad ALPHA: la stima e' buona dopo poche decine di finestre, non dopo ~3/ALPHA.
         if valid:
             if not s["has_baseline"]:
                 s.update({"mu_s": x_s, "var_s": 0.0, "mu_v": x_v, "var_v": 0.0, "has_baseline": True})
             else:
                 clip_s = None if warmup else CLIP_K * sigma(s["var_s"], SIGMA_MIN_SENT)
                 clip_v = None if warmup else CLIP_K * sigma(s["var_v"], SIGMA_MIN_VOL)
-                s["mu_s"], s["var_s"] = ewma(s["mu_s"], s["var_s"], x_s, clip_s)
-                s["mu_v"], s["var_v"] = ewma(s["mu_v"], s["var_v"], x_v, clip_v)
+                alpha = max(ALPHA, 1.0 / (s["n_valid"] + 1)) if warmup else ALPHA
+                s["mu_s"], s["var_s"] = ewma(s["mu_s"], s["var_s"], x_s, clip_s, alpha)
+                s["mu_v"], s["var_v"] = ewma(s["mu_v"], s["var_v"], x_v, clip_v, alpha)
             s["n_valid"] += 1
 
         # 8) Riga di monitor: tutti i campi di sentiment.1m piu' lo stato del detector
