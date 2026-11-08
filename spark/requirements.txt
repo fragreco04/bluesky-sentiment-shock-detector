@@ -1,8 +1,7 @@
-# torch viene installato dall'indice CPU di PyTorch (vedi Dockerfile): niente CUDA, ~5x piu' leggero.
-# Serve solo a ov_export.py (conversione PyTorch -> OpenVINO fp32).
+# torch serve solo a ov_export.py (conversione PyTorch -> OpenVINO fp32).
 torch==2.9.1
 transformers==4.57.3
-pandas==2.3.3          # pandas_udf; Spark 4.0 richiede pandas >= 2.0
-pyarrow==21.0.0        # pandas_udf; Spark 4.0 richiede pyarrow >= 11
+pandas==2.3.3
+pyarrow==21.0.0
 numpy==2.2.6           # ultima serie di numpy che supporta Python 3.10
-openvino==2026.4.0     # motore di inferenza Intel: GPU integrata (e CPU)
+openvino==2026.4.0     # motore di inferenza Intel

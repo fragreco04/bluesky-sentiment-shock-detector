@@ -1,13 +1,3 @@
-#!/bin/bash
-# Inizializzazione di Elasticsearch: policy ILM, template degli indici, indici fissi.
-#
-# Come kafka-init per i topic: gira una volta a ogni "docker compose up" ed e' idempotente
-# (PUT sovrascrive policy e template con la stessa definizione, gli indici esistenti non si toccano).
-#
-# Attenzione: un template agisce solo sugli indici creati DOPO. Se cambi un mapping:
-#   - posts-*: vale dal giorno successivo (nuovo indice giornaliero)
-#   - sentiment-1m e alerts: vanno cancellati e ricostruiti (i topic Kafka hanno retention infinita,
-#     basta cancellare l'indice e resettare il consumer group del logstash-indexer)
 set -euo pipefail
 
 ES="http://${ES_HOST}:${ES_PORT}"
