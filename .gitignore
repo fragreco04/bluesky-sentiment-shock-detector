@@ -4,3 +4,6 @@ X_studio/
 studio/
 .venv/
 X_note/
+.vscode/
+analisi/dati/__pycache__/
+analisi/dati/
