@@ -7,3 +7,4 @@ X_note/
 .vscode/
 analisi/dati/__pycache__/
 analisi/dati/
+spark/jobs/__pycache__/
