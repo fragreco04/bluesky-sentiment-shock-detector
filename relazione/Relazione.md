@@ -273,16 +273,20 @@ Per ogni finestra il detector esegue gli stessi passi, descritti nelle prossime 
 ```mermaid
 flowchart TD
     A[Nuova finestra] --> B{Già vista?}
-    B -- sì --> X[Ignorata]
+    B -- sì --> X[Ignorata<br/>nessun output]
     B -- no --> C{Buco rispetto<br/>alla precedente?}
-    C --> D[Calcolo degli z-score<br/>con la baseline attuale]
+    C -- sì --> C2[Gestione del buco:<br/>da 5 finestre chiude l'episodio<br/>da 60 minuti rifà il warmup]
+    C2 --> D
+    C -- no --> D[Calcolo degli z-score<br/>con la baseline attuale]
     D --> E{Controlli di qualità<br/>superati?}
-    E -- no --> F[Finestra scartata:<br/>nessuna decisione]
+    E -- no --> F[Finestra scartata:<br/>nessuna decisione,<br/>baseline invariata]
     E -- sì --> G{Warmup<br/>finito?}
-    G -- no --> H[Aggiorna solo la baseline]
+    G -- no --> H[Aggiorna solo la baseline<br/>pesi 1/n, senza taglio]
     G -- sì --> I{Regola di shock}
-    I --> J[Apre, prosegue o<br/>chiude l'episodio]
-    J --> K[Aggiorna la baseline]
+    I -- anomala --> J1[Apre o prosegue l'episodio<br/>direzione opposta: lo chiude<br/>e ne apre uno nuovo]
+    I -- normale --> J2[Se c'è un episodio aperto:<br/>conteggio + 1, a 5 lo chiude]
+    J1 --> K[Aggiorna la baseline<br/>con winsorizzazione]
+    J2 --> K
     F --> L[Riga su sentiment.monitor]
     H --> L
     K --> L
