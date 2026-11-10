@@ -391,7 +391,7 @@ La tabella mostra un episodio prodotto dal codice del detector su una serie sint
 
 Alle 23:41 il sentiment supera la soglia moderata, ma senza la conferma del volume il minuto non è anomalo. Alle 23:42 crolla di più di undici deviazioni standard e l'episodio si apre; tra le 23:43 e le 23:45 lo shock continua insieme a un'esplosione del volume. Alle 23:46 lo z-score è sotto entrambe le soglie e inizia il conteggio. Alle 23:47 lo z-score sarebbe di nuovo sopra soglia, ma il rapporto autori/post di 0,70 fa scartare la finestra come probabile spam: non riapre l'episodio e non fa avanzare il conteggio. Alle 23:51, dopo cinque finestre normali, l'episodio si chiude, con inizio alle 23:42, fine alle 23:46, picco di -11,60 e quattro finestre anomale. Tutte le finestre dalle 23:42 alle 23:51 portano su `sentiment.monitor` lo stesso identificativo dell'episodio. Il formato completo dei messaggi è nell'[Appendice A](Appendice_A_Topic_e_messaggi.md).
 
-![Figura 6.1](<Pasted Image.png>)
+![Figura 6.1](<assets/Pasted Image.png>)
 *Figura 6.1 – Sentiment medio minuto per minuto durante un episodio, visualizzato in Kibana. I dati in arrivo erano quelli del producer sintetico.*
 
 ## 6.8 La baseline durante uno shock
@@ -531,36 +531,36 @@ La pipeline completa ha girato domenica 8 novembre 2026, dalle 18 a mezzanotte o
 
 La velocità mediana di Q1 dentro Spark è stata di **74,9 post al secondo**, praticamente uguale al benchmark. I post arrivavano in media a 29,5 al secondo, quindi Q1 ha lavorato a circa il 40% delle sue possibilità, con un margine di due volte e mezzo. Solo in un micro-batch su mille Q1 è stato più lento degli arrivi, e i micro-batch sono durati in mediana 3,9 secondi su un intervallo di 10.
 
-![Figura 9.1](<Pasted image 20261110010938.png>)
+![Figura 9.1](<assets/Pasted image 20261110010938.png>)
 *Figura 9.1 – Velocità di elaborazione di Q1 (blu) e velocità di arrivo dei post (arancione), micro-batch per micro-batch. La linea tratteggiata è la velocità misurata nel benchmark.*
 
 L'unico picco degli arrivi, vicino a 100 post al secondo, segue due micro-batch quasi vuoti ed è probabilmente un piccolo accumulo, non un vero picco di traffico. Le prime righe del log mostravano circa 45 post al secondo, e avevo ipotizzato un costo fisso di Spark per ogni micro-batch; sui dati completi l'ipotesi non regge, e quei valori erano solo il riscaldamento della GPU.
 
 Tutti i 350 minuti attesi sono presenti, senza buchi e senza duplicati; l'unica finestra scartata è la prima, `startup`. Contando i post minuto per minuto dall'indice e confrontandoli con `n_posts` di Q2, i valori coincidono in 349 minuti su 350, e nell'unico minuto diverso manca un solo post. Nell'indice non c'è nessun `uri` duplicato. Non ci sono stati segni di spam: il rapporto autori/post è rimasto in mediana a 0,92 e mai sotto 0,87.
 
-![Figura 9.2](<Pasted image 20261110011146.png>)
+![Figura 9.2](<assets/Pasted image 20261110011146.png>)
 *Figura 9.2 – Rapporto tra autori e post, minuto per minuto. La linea rossa è la soglia sotto la quale il detector scarta la finestra come probabile spam.*
 
 ## 9.3 Il traffico e il sentiment
 
 Il traffico è stato molto stabile: dalle 18 in poi la media oraria è rimasta tra 28,5 e 30,4 post al secondo, coerente con i 32,8 misurati durante l'ottimizzazione.
 
-![Figura 9.3](<Pasted image 20261110011241.png>)
+![Figura 9.3](<assets/Pasted image 20261110011241.png>)
 *Figura 9.3 – Post in inglese al secondo, minuto per minuto (blu), e volume tipico stimato dalla baseline del detector (arancione).*
 
 Nel grafico si notano piccoli picchi isolati quasi sempre allo scoccare dell'ora. Un'ipotesi plausibile, non verificata, è che si tratti di account automatici che pubblicano a orari fissi; negli stessi minuti la quota di post negativi scende di colpo (figura 9.5), come ci si aspetterebbe da messaggi automatici di tono neutro. Sono anche un esempio concreto della regola del capitolo 6: un aumento di volume senza cambiamento del sentiment non è uno shock, e infatti non sono stati segnalati.
 
 Il sentiment medio è sceso lentamente, da circa 0,027 nell'ora delle 18 a valori tra 0,014 e 0,019 nelle ore successive: un andamento della serata che la baseline ha seguito senza problemi.
 
-![Figura 9.4](<Pasted image 20261110011353.png>)
+![Figura 9.4](<assets/Pasted image 20261110011353.png>)
 *Figura 9.4 – Sentiment medio minuto per minuto (blu), baseline del detector (arancione) e banda di ±3,5 deviazioni standard intorno alla baseline (azzurro). Una finestra fuori dalla banda sarebbe uno shock forte.*
 
 Il sentiment oscilla ma resta sempre dentro la banda. All'inizio la banda è più larga, perché durante il warmup la variabilità stimata si basa su poche finestre. Tra le etichette prevalgono i post neutri (42,2%), seguiti da negativi (29,7%) e positivi (28,1%).
 
-![Figura 9.5](<Pasted image 20261110011457.png>)
+![Figura 9.5](<assets/Pasted image 20261110011457.png>)
 *Figura 9.5 – Quota di post negativi (rosso) e positivi (verde), minuto per minuto.*
 
-![Figura 9.6](<Pasted image 20261110011524.png>)
+![Figura 9.6](<assets/Pasted image 20261110011524.png>)
 *Figura 9.6 – Distribuzione del punteggio di sentiment dei singoli post della sessione.*
 
 La distribuzione dei punteggi ha tre picchi: vicino a zero e vicino ai due estremi. La variabilità dei singoli post è alta, con una deviazione standard intorno a 0,6, ma la media di quasi duemila post al minuto è stabile: è questo che permette al detector di accorgersi di spostamenti di pochi centesimi. Infine, il 59,1% dei post è una risposta, il 10,0% cita un altro post e il 9,5% condivide un link: Bluesky è soprattutto un luogo di conversazione, il che conferma l'utilità dei post più citati come evidenza per l'explainer.
@@ -575,7 +575,7 @@ In sei ore il detector non ha aperto nessun episodio. Per capire se fosse poco s
 | $\lvert z \rvert > 2{,}5$ | 2 | circa 4 |
 | $\lvert z \rvert > 3{,}5$ | 0 | meno di 1 |
 
-![Figura 9.7](<Pasted image 20261110011749.png>)
+![Figura 9.7](<assets/Pasted image 20261110011749.png>)
 *Figura 9.7 – A sinistra, z-score del sentiment minuto per minuto; le linee rosse continue sono le soglie dello shock forte (±3,5), quelle tratteggiate le soglie dello shock moderato (±2,5). A destra, la distribuzione degli z-score delle finestre attive.*
 
 Le due finestre oltre 2,5 non erano accompagnate da un'esplosione del volume, e l'unico picco di volume non aveva un sentiment anomalo. Il detector si è comportato come doveva. Il warmup è durato 41 finestre: la prima scartata più le 40 valide previste.
@@ -600,7 +600,7 @@ Su una copia della serie il sentiment medio viene spostato di una quantità fiss
 | -0,08 | 4,8 | 100% | 100% |
 | -0,10 | 6,1 | 100% | 100% |
 
-![Figura 9.8](<Pasted image 20261110012201.png>)
+![Figura 9.8](<assets/Pasted image 20261110012201.png>)
 *Figura 9.8 – Percentuale di shock rilevati in funzione dell'ampiezza dello spostamento, con il solo sentiment (arancione) e con il volume aumentato del 50% (blu).*
 
 Con il solo sentiment il detector vede quasi sempre gli shock da -0,06 in su; quando sale anche il volume, la regola moderata abbassa molto la soglia e già da -0,04 lo shock viene visto quasi sempre. Per dare un'idea, uno spostamento di 0,05 corrisponde a circa il 6% di tutti i post in inglese di quel minuto che passano da neutri a decisamente negativi: il detector globale vede solo eventi di grande portata.
@@ -613,7 +613,7 @@ Con il solo sentiment il detector vede quasi sempre gli shock da -0,06 in su; qu
 
 **Uno shock prolungato.** Ho inserito uno shock di 10 minuti in 20 punti della serata. Con -0,10 ha sempre aperto un episodio, con -0,06 in 17 casi su 20. Ogni shock ha prodotto un solo episodio, quasi sempre aperto sulla prima finestra, e nessun episodio si è chiuso per inversione. L'episodio però finisce molto prima dello shock: con -0,10 solo 4 finestre su 10 vengono giudicate anomale (fine mediana 6 minuti prima di quella vera), con -0,06 di solito una sola. È l'effetto previsto nella sezione 6.8: la banda si allarga di circa il 15% al minuto e un sentiment ancora basso smette presto di essere sorprendente.
 
-![Figura 9.9](<Pasted image 20261110012726.png>)
+![Figura 9.9](<assets/Pasted image 20261110012726.png>)
 *Figura 9.9 – Un esempio di shock di -0,10 per 10 minuti (area rossa). In alto, sentiment medio, baseline e banda di ±3,5 deviazioni standard; in basso, lo z-score, con le finestre anomale in rosso e l'episodio fino alla chiusura in arancione. Gli orari sono in UTC.*
 
 La conseguenza pratica è che l'inizio di un episodio è affidabile, mentre la fine indica quando lo shock ha smesso di essere una sorpresa. L'explainer, che analizza l'intervallo tra inizio e fine, per uno shock di 10 minuti vede quindi solo i primi 4 minuti circa: di solito basta, perché contengono già migliaia di post.
@@ -628,7 +628,7 @@ La conseguenza pratica è che l'inizio di un episodio è affidabile, mentre la f
 | 90 minuti | 95% | 100% | 60% | 85% | ×1,09 |
 | 120 minuti | 100% | 100% | 75% | 80% | ×1,04 |
 
-![Figura 9.10](<Pasted image 20261110013023.png>)
+![Figura 9.10](<assets/Pasted image 20261110013023.png>)
 *Figura 9.10 – Percentuale di secondi shock rilevati in funzione della distanza dal primo (linee continue), confrontata con lo stesso shock inserito da solo (linee tratteggiate).*
 
 Dopo uno shock il detector resta meno sensibile per circa un'ora: a 20 minuti di distanza la variabilità della baseline è ancora una volta e mezza quella normale, e il secondo shock da -0,08 viene visto solo una volta su quattro. Quando viene visto, apre sempre un episodio separato. Due eventi distinti a meno di un'ora di distanza rischiano quindi di produrre un solo alert.
@@ -655,7 +655,7 @@ I post sono divisi in un indice al giorno, scelto in base al campo `time`, perch
 
 Le dashboard non vanno costruite a mano: il servizio `kibana-init` le importa a ogni avvio dal file `kibana/dashboards.ndjson`, versionato con il codice, così sopravvivono anche a un `docker compose down -v`. Sono tre: la **Panoramica**, per seguire la situazione (salute della pipeline, sentiment con baseline, z-score con le soglie, tabelle degli episodi e delle spiegazioni); l'**Indagine sui post**, per verificare una spiegazione leggendo i post e i link di un episodio; e la dashboard di **Sviluppo**, che controlla le fasi una per una anche durante il warmup. Nel grafico degli z-score ogni intervallo mostra il massimo e il minimo invece della media, così un singolo minuto anomalo resta visibile anche guardando 24 ore. La descrizione completa dei pannelli è nell'[Appendice D](Appendice_D_Kibana.md).
 
-![Figura 10.1](<Pasted image 20261110022152.png>)
+![Figura 10.1](<assets/Pasted image 20261110022152.png>)
 *Figura 10.1 – La dashboard "Panoramica".*
 
 ---
