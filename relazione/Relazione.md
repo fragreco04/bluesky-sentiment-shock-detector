@@ -100,7 +100,7 @@ Anche se pubblici, i post sono dati personali tutelati dal **GDPR**. La pipeline
 
 La pipeline è una catena di fasi collegate da Kafka: nessun componente parla direttamente con un altro, ma ognuno legge da un topic e scrive su un altro.
 
-![pipeline](<pipe2.svg>)
+![pipeline](<assets/pipe2.svg>)
 
 Il producer riceve i post da Bluesky e li passa a Logstash, che li controlla, li pulisce e li scrive su Kafka. Spark calcola il sentiment di ogni post (Q1), lo raggruppa con gli altri post dello stesso minuto (Q2) e confronta ogni minuto con il comportamento recente per trovare gli shock (Q3). Quando uno shock si conclude, l'explainer recupera i post di quel periodo e chiede a un LLM di spiegare cosa è successo. Tutto finisce in Elasticsearch e si visualizza con Kibana.
 
