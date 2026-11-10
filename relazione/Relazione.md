@@ -359,15 +359,21 @@ Con questo peso le formule calcolano esattamente media e varianza di tutte le fi
 Uno shock reale dura spesso diversi minuti e oscilla attorno alla soglia. L'**episodio** raggruppa le finestre anomale vicine in un solo evento:
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Chiuso
-    Chiuso --> Aperto: finestra anomala / messaggio open
-    Aperto --> Aperto: anomala nella stessa direzione / conteggio a zero
-    Aperto --> Aperto: normale / conteggio + 1
-    Aperto --> Aperto: scartata / nessun effetto
-    Aperto --> Chiuso: 5 finestre normali di fila / closed (normal)
-    Aperto --> Aperto: anomala nella direzione opposta / closed (reversal) e nuovo open
-    Aperto --> Chiuso: buco di almeno 5 finestre / closed (gap)
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
+flowchart LR
+    S(( )) --> C["<b>Chiuso</b><br/>nessun episodio"]
+    C -->|"finestra anomala<br/>→ messaggio open"| A["<b>Aperto</b><br/>episodio in corso"]
+    A -->|"5 finestre normali<br/>di fila → closed (normal)"| C
+    A -->|"buco di almeno<br/>5 finestre → closed (gap)"| C
+    A -.- N["<b>Restano in Aperto</b><br/>anomala, stessa direzione: conteggio a zero<br/><br/>normale: conteggio + 1<br/><br/>scartata: nessun effetto<br/><br/>anomala, direzione opposta:<br/>closed (reversal) e nuovo open"]
+
+    classDef chiuso fill:#eceff1,stroke:#607d8b,color:#263238
+    classDef aperto fill:#ede7f6,stroke:#5e35b1,color:#311b92
+    classDef nota fill:#fffde7,stroke:#f9a825,color:#5d4037
+    class C chiuso
+    class A aperto
+    class N nota
+    style S fill:#37474f,stroke:#37474f
 ```
 
 Alla prima finestra anomala il detector apre un episodio e scrive un messaggio `open`. L'identificativo dipende solo dai dati, per esempio `shock-2026-11-03T23:42:00Z`, quindi una rielaborazione produce lo stesso identificativo. Nell'episodio viene "congelata" la baseline di quel momento, così la segnalazione dice rispetto a che cosa lo shock è anomalo. Ogni altra finestra anomala nella stessa direzione allunga l'episodio, aggiorna il picco e azzera il conteggio delle finestre normali, senza scrivere messaggi. Dopo cinque finestre normali consecutive l'episodio si chiude con un messaggio `closed`, che riporta come fine quella dell'ultima finestra anomala: la durata misura lo shock, non lo shock più l'attesa. Le finestre scartate non contano né come anomale né come normali. Se arriva una finestra anomala nella direzione opposta, l'episodio si chiude con motivo `reversal` e se ne apre subito uno nuovo: un crollo seguito da un'euforia sono due eventi distinti.
