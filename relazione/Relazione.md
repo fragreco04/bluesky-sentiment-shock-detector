@@ -128,14 +128,7 @@ Structured Streaming lavora a **micro-batch**: ogni dieci secondi legge da Kafka
 
 Ogni evento ricevuto da Logstash finisce in uno e un solo posto, scelto tra tre:
 
-```mermaid
-flowchart TD
-    A[Evento da Jetstream] --> B{JSON valido e<br>campi obbligatori corretti?}
-    B -- no --> DLQ[(posts.dlq<br>con il motivo)]
-    B -- sì --> C{Interessa al progetto?<br>post nuovo, con testo, in inglese}
-    C -- no --> D[Scartato e conteggiato]
-    C -- sì --> RAW[(posts.raw)]
-```
+![ingestion](<assets/1_ingest_logstash.drawio.svg>)
 
 Un evento **scartato per scelta** è corretto ma non interessa: cancellazioni e modifiche (interessa il momento in cui le persone scrivono), post senza testo e post che non dichiarano la lingua `en`. Viene solo conteggiato. Un **dato rotto**, per esempio senza autore o con un orario inesistente, viene invece messo da parte nel topic `posts.dlq`, una **dead letter queue**, insieme al motivo dello scarto, perché indica che qualcosa non va nella sorgente o nella pipeline. Ogni controllo ha un nome e Logstash conta quanti eventi passano da ciascuno, quindi dall'API di monitoraggio si sa in ogni momento quanti post sono stati scartati e perché. L'elenco completo dei controlli è nell'[Appendice A](Appendice_A_Topic_e_messaggi.md).
 
@@ -270,27 +263,7 @@ Lo stato del detector è minimo: la baseline (quattro numeri), un contatore per 
 
 Per ogni finestra il detector esegue gli stessi passi, descritti nelle prossime sezioni:
 
-```mermaid
-flowchart TD
-    A[Nuova finestra] --> B{Già vista?}
-    B -- sì --> X[Ignorata<br/>nessun output]
-    B -- no --> C{Buco rispetto<br/>alla precedente?}
-    C -- sì --> C2[Gestione del buco:<br/>da 5 finestre chiude l'episodio<br/>da 60 minuti rifà il warmup]
-    C2 --> D
-    C -- no --> D[Calcolo degli z-score<br/>con la baseline attuale]
-    D --> E{Controlli di qualità<br/>superati?}
-    E -- no --> F[Finestra scartata:<br/>nessuna decisione,<br/>baseline invariata]
-    E -- sì --> G{Warmup<br/>finito?}
-    G -- no --> H[Aggiorna solo la baseline<br/>pesi 1/n, senza taglio]
-    G -- sì --> I{Regola di shock}
-    I -- anomala --> J1[Apre o prosegue l'episodio<br/>direzione opposta: lo chiude<br/>e ne apre uno nuovo]
-    I -- normale --> J2[Se c'è un episodio aperto:<br/>conteggio + 1, a 5 lo chiude]
-    J1 --> K[Aggiorna la baseline<br/>con winsorizzazione]
-    J2 --> K
-    F --> L[Riga su sentiment.monitor]
-    H --> L
-    K --> L
-```
+![detectoe](<assets/2_detector_finestra.drawio.svg>)
 
 ## 6.2 La baseline e gli z-score
 
@@ -358,23 +331,7 @@ Con questo peso le formule calcolano esattamente media e varianza di tutte le fi
 
 Uno shock reale dura spesso diversi minuti e oscilla attorno alla soglia. L'**episodio** raggruppa le finestre anomale vicine in un solo evento:
 
-```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
-flowchart LR
-    S(( )) --> C["<b>Chiuso</b><br/>nessun episodio"]
-    C -->|"finestra anomala<br/>→ messaggio open"| A["<b>Aperto</b><br/>episodio in corso"]
-    A -->|"5 finestre normali<br/>di fila → closed (normal)"| C
-    A -->|"buco di almeno<br/>5 finestre → closed (gap)"| C
-    A -.- N["<b>Restano in Aperto</b><br/>anomala, stessa direzione: conteggio a zero<br/><br/>normale: conteggio + 1<br/><br/>scartata: nessun effetto<br/><br/>anomala, direzione opposta:<br/>closed (reversal) e nuovo open"]
-
-    classDef chiuso fill:#eceff1,stroke:#607d8b,color:#263238
-    classDef aperto fill:#ede7f6,stroke:#5e35b1,color:#311b92
-    classDef nota fill:#fffde7,stroke:#f9a825,color:#5d4037
-    class C chiuso
-    class A aperto
-    class N nota
-    style S fill:#37474f,stroke:#37474f
-```
+![episodio](<assets/3_stati_episodio.drawio.svg>)
 
 Alla prima finestra anomala il detector apre un episodio e scrive un messaggio `open`. L'identificativo dipende solo dai dati, per esempio `shock-2026-11-03T23:42:00Z`, quindi una rielaborazione produce lo stesso identificativo. Nell'episodio viene "congelata" la baseline di quel momento, così la segnalazione dice rispetto a che cosa lo shock è anomalo. Ogni altra finestra anomala nella stessa direzione allunga l'episodio, aggiorna il picco e azzera il conteggio delle finestre normali, senza scrivere messaggi. Dopo cinque finestre normali consecutive l'episodio si chiude con un messaggio `closed`, che riporta come fine quella dell'ultima finestra anomala: la durata misura lo shock, non lo shock più l'attesa. Le finestre scartate non contano né come anomale né come normali. Se arriva una finestra anomala nella direzione opposta, l'episodio si chiude con motivo `reversal` e se ne apre subito uno nuovo: un crollo seguito da un'euforia sono due eventi distinti.
 
@@ -479,14 +436,7 @@ Prima delle misure ho corretto alcuni problemi evidenti: troppi thread per pochi
 
 ## 8.3 Le strade provate
 
-```mermaid
-flowchart TD
-    A["PyTorch fp32<br/>circa 13 post/s"] --> B["PyTorch int8<br/>circa 31 post/s<br/>troppo impreciso"]
-    A --> C["OpenVINO fp32 su CPU<br/>circa 13 post/s<br/>nessun guadagno"]
-    C --> D["OpenVINO int8 su CPU<br/>circa 44 post/s<br/>fedele, ma sotto l'obiettivo"]
-    D --> E["OpenVINO int8 su GPU<br/>circa 67 post/s<br/>amplifica gli estremi"]
-    C --> F["OpenVINO fp32 su GPU<br/>circa 75 post/s<br/>scelto"]
-```
+![modello](<assets/4_scelta_modello.drawio.svg>)
 
 Con PyTorch in precisione normale (**fp32**) la velocità era circa 12 post al secondo con qualunque combinazione di processi e thread: il limite sono i quattro core fisici, e più processi significano solo più memoria. La **quantizzazione int8** di PyTorch, che rappresenta i numeri del modello con 8 bit invece di 32, è circa 2,5 volte più veloce, ma solo il 76,7% delle etichette restava uguale e il sentiment medio passava da +0,013 a +0,124, uno spostamento grande quanto gli shock da rilevare. Nemmeno le varianti più precise raggiungevano le soglie: dentro questi modelli alcuni valori sono molto più grandi degli altri, e la quantizzazione semplice non li gestisce bene.
 
