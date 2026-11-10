@@ -1,15 +1,15 @@
 # Appendice C – Benchmark completi di Q1
 
-Questa appendice raccoglie le tabelle di tutte le prove descritte nel capitolo 8 della [relazione](https://claude.ai/chat/Relazione.md). Tutte le misure sono state fatte fuori da Spark, su 2000 post reali presi da `posts.raw`, con lo script di benchmark.
+Questa appendice raccoglie le tabelle di tutte le prove descritte nel capitolo 8 della [relazione](Relazione.md). Tutte le misure sono state fatte fuori da Spark, su 2000 post reali presi da `posts.raw`, con lo script di benchmark.
 
 ## C.1 Il computer
 
-|Componente|Dettagli|
+| Componente | Dettagli |
 |---|---|
-|Processore|Intel Core i7-1165G7, 4 core fisici, 8 thread, 2,8 GHz|
-|Memoria|16 GB|
-|Grafica|Intel Iris Xe, integrata nel processore|
-|Ambiente|Docker dentro WSL2 su Windows|
+| Processore | Intel Core i7-1165G7, 4 core fisici, 8 thread, 2,8 GHz |
+| Memoria | 16 GB |
+| Grafica | Intel Iris Xe, integrata nel processore |
+| Ambiente | Docker dentro WSL2 su Windows |
 
 ## C.2 Note sul metodo
 
@@ -25,11 +25,11 @@ Le soglie per accettare una configurazione erano almeno il 97% di etichette ugua
 
 "2×2" significa due processi, ognuno con la sua copia del modello e due thread.
 
-|Configurazione|Velocità|
+| Configurazione | Velocità |
 |---|---|
-|1 processo × 4 thread|11,4 post/s|
-|2 processi × 2 thread|11,8 post/s|
-|4 processi × 1 thread|non completata, memoria insufficiente|
+| 1 processo × 4 thread | 11,4 post/s |
+| 2 processi × 2 thread | 11,8 post/s |
+| 4 processi × 1 thread | non completata, memoria insufficiente |
 
 Il limite sono i quattro core fisici: più processi non aumentano la velocità e occupano solo più memoria.
 
@@ -37,57 +37,57 @@ Il limite sono i quattro core fisici: più processi non aumentano la velocità e
 
 Le tre varianti calcolano le scale dei pesi separatamente per ogni canale, lasciano in precisione piena lo strato finale che decide l'etichetta, oppure lasciano in precisione piena anche gli strati più delicati.
 
-|Variante|Velocità|Etichette uguali|Spostamento della media|
+| Variante | Velocità | Etichette uguali | Spostamento della media |
 |---|---|---|---|
-|fp32 (riferimento)|13,4 post/s|100%|0|
-|int8|31,2 post/s|76,7%|+0,111|
-|int8, scale per canale|30,4 post/s|81,5%|+0,093|
-|int8, senza lo strato finale|29,7 post/s|81,4%|+0,093|
-|int8, senza gli strati più delicati|19,9 post/s|90,2%|+0,018|
+| fp32 (riferimento) | 13,4 post/s | 100% | 0 |
+| int8 | 31,2 post/s | 76,7% | +0,111 |
+| int8, scale per canale | 30,4 post/s | 81,5% | +0,093 |
+| int8, senza lo strato finale | 29,7 post/s | 81,4% | +0,093 |
+| int8, senza gli strati più delicati | 19,9 post/s | 90,2% | +0,018 |
 
 ## C.5 OpenVINO sulla CPU
 
 Le versioni quantizzate erano calibrate su 300 post diversi da quelli del benchmark.
 
-|Motore|Velocità|Etichette uguali|Spostamento della media|
+| Motore | Velocità | Etichette uguali | Spostamento della media |
 |---|---|---|---|
-|PyTorch fp32 (riferimento)|13,3 post/s|100%|0|
-|OpenVINO fp32|13,5 post/s|100%|0,000|
-|OpenVINO int8|43,4 post/s|97,2%|+0,012|
-|OpenVINO int8 senza SmoothQuant|44,4 post/s|95,7%|+0,002|
+| PyTorch fp32 (riferimento) | 13,3 post/s | 100% | 0 |
+| OpenVINO fp32 | 13,5 post/s | 100% | 0,000 |
+| OpenVINO int8 | 43,4 post/s | 97,2% | +0,012 |
+| OpenVINO int8 senza SmoothQuant | 44,4 post/s | 95,7% | +0,002 |
 
 Spostamento per classe con diversi livelli di SmoothQuant:
 
-|Variante|Etichette uguali|Spost. medio|Spost. negativi|Spost. neutri|Spost. positivi|
+| Variante | Etichette uguali | Spost. medio | Spost. negativi | Spost. neutri | Spost. positivi |
 |---|---|---|---|---|---|
-|int8, SmoothQuant 0,95 (default)|97,2%|+0,012|+0,024|+0,016|-0,005|
-|**int8, SmoothQuant 0,75**|**98,1%**|**+0,002**|**+0,004**|**+0,002**|**-0,002**|
-|int8, SmoothQuant 0,50|94,6%|+0,021|+0,030|+0,028|+0,001|
-|int8 senza SmoothQuant|95,7%|+0,002|+0,004|+0,007|-0,008|
+| int8, SmoothQuant 0,95 (default) | 97,2% | +0,012 | +0,024 | +0,016 | -0,005 |
+| **int8, SmoothQuant 0,75** | **98,1%** | **+0,002** | **+0,004** | **+0,002** | **-0,002** |
+| int8, SmoothQuant 0,50 | 94,6% | +0,021 | +0,030 | +0,028 | +0,001 |
+| int8 senza SmoothQuant | 95,7% | +0,002 | +0,004 | +0,007 | -0,008 |
 
 In un benchmark sulla CPU un processo con quattro thread sembrava più veloce di due processi con due thread (48 contro 41–44 post al secondo). Confrontandoli nella stessa esecuzione i valori sono risultati uguali (45,7 contro 45,4): la differenza precedente era solo una variazione casuale.
 
 ## C.6 La GPU integrata
 
-|Motore|Velocità|Memoria|Etichette uguali|Spost. medio|Spost. negativi|Spost. positivi|
+| Motore | Velocità | Memoria | Etichette uguali | Spost. medio | Spost. negativi | Spost. positivi |
 |---|---|---|---|---|---|---|
-|PyTorch fp32 (riferimento)|12,9 post/s|1,6 GB|100%|0|0|0|
-|OpenVINO int8 (SQ 0,75) su CPU|43–46 post/s|1,4 GB|98,1%|+0,002|+0,004|-0,002|
-|**OpenVINO fp32 su GPU**|**74,6 post/s**|**1,1 GB**|**99,8%**|**0,000**|**0,000**|**0,000**|
-|OpenVINO int8 (SQ 0,75) su GPU|66,9 post/s|1,1 GB|97,8%|0,000|-0,027|+0,035|
+| PyTorch fp32 (riferimento) | 12,9 post/s | 1,6 GB | 100% | 0 | 0 | 0 |
+| OpenVINO int8 (SQ 0,75) su CPU | 43–46 post/s | 1,4 GB | 98,1% | +0,002 | +0,004 | -0,002 |
+| **OpenVINO fp32 su GPU** | **74,6 post/s** | **1,1 GB** | **99,8%** | **0,000** | **0,000** | **0,000** |
+| OpenVINO int8 (SQ 0,75) su GPU | 66,9 post/s | 1,1 GB | 97,8% | 0,000 | -0,027 | +0,035 |
 
 Per non perdere fedeltà, i pesi del modello sono salvati su disco nella loro forma completa a 32 bit, e non arrotondati come farebbe OpenVINO per default. L'int8 sulla GPU è più lento del fp32 perché questa scheda non trae vantaggio dai numeri a 8 bit.
 
 ## C.7 Riepilogo
 
-|Tentativo|Velocità|Fedeltà|Esito|
+| Tentativo | Velocità | Fedeltà | Esito |
 |---|---|---|---|
-|PyTorch fp32 (partenza)|circa 13 post/s|riferimento|troppo lento|
-|PyTorch int8|circa 20–31 post/s|77–90% di etichette uguali|troppo impreciso|
-|OpenVINO fp32 su CPU|circa 13 post/s|identica|nessun guadagno|
-|OpenVINO int8 su CPU|circa 44 post/s|98,1%, spostamento uniforme|buono, ma sotto l'obiettivo|
-|OpenVINO int8 su GPU|circa 67 post/s|97,8%, amplifica gli estremi|scartato|
-|**OpenVINO fp32 su GPU**|**circa 75 post/s**|**99,8%, spostamento nullo**|**scelto**|
+| PyTorch fp32 (partenza) | circa 13 post/s | riferimento | troppo lento |
+| PyTorch int8 | circa 20–31 post/s | 77–90% di etichette uguali | troppo impreciso |
+| OpenVINO fp32 su CPU | circa 13 post/s | identica | nessun guadagno |
+| OpenVINO int8 su CPU | circa 44 post/s | 98,1%, spostamento uniforme | buono, ma sotto l'obiettivo |
+| OpenVINO int8 su GPU | circa 67 post/s | 97,8%, amplifica gli estremi | scartato |
+| **OpenVINO fp32 su GPU** | **circa 75 post/s** | **99,8%, spostamento nullo** | **scelto** |
 
 ## C.8 Limiti
 

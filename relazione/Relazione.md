@@ -4,26 +4,26 @@ Progetto creato da **Francesco Greco** per il corso "_Technologies for Advanced 
 
 **Indice**:
 
-- [1. Introduzione](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#1-introduzione)
-- [2. I dati: Bluesky e Jetstream](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#2-i-dati-bluesky-e-jetstream)
-- [3. Architettura della pipeline](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#3-architettura-della-pipeline)
-- [4. Calcolo del sentiment (Q1)](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#4-calcolo-del-sentiment-q1)
-- [5. Aggregazione per minuto (Q2)](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#5-aggregazione-per-minuto-q2)
-- [6. Rilevamento degli shock (Q3)](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#6-rilevamento-degli-shock-q3)
-- [7. Spiegazione automatica degli shock (explainer)](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#7-spiegazione-automatica-degli-shock-explainer)
-- [8. Ottimizzazione delle prestazioni](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#8-ottimizzazione-delle-prestazioni)
-- [9. Analisi di una sessione di ascolto](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#9-analisi-di-una-sessione-di-ascolto)
-- [10. Visualizzazione con Kibana](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#10-visualizzazione-con-kibana)
-- [11. Limiti e sviluppi futuri](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#11-limiti-e-sviluppi-futuri)
-- [12. Conclusioni](https://claude.ai/chat/23c09f30-36e5-46e8-8c72-4e82243dd9c5#12-conclusioni)
+- [1. Introduzione](#1-introduzione)
+- [2. I dati: Bluesky e Jetstream](#2-i-dati-bluesky-e-jetstream)
+- [3. Architettura della pipeline](#3-architettura-della-pipeline)
+- [4. Calcolo del sentiment (Q1)](#4-calcolo-del-sentiment-q1)
+- [5. Aggregazione per minuto (Q2)](#5-aggregazione-per-minuto-q2)
+- [6. Rilevamento degli shock (Q3)](#6-rilevamento-degli-shock-q3)
+- [7. Spiegazione automatica degli shock (explainer)](#7-spiegazione-automatica-degli-shock-explainer)
+- [8. Ottimizzazione delle prestazioni](#8-ottimizzazione-delle-prestazioni)
+- [9. Analisi di una sessione di ascolto](#9-analisi-di-una-sessione-di-ascolto)
+- [10. Visualizzazione con Kibana](#10-visualizzazione-con-kibana)
+- [11. Limiti e sviluppi futuri](#11-limiti-e-sviluppi-futuri)
+- [12. Conclusioni](#12-conclusioni)
 
 **Appendici** (file separati):
 
-- [A. Topic Kafka e formato dei messaggi](https://claude.ai/chat/Appendice_A_Topic_e_messaggi.md)
-- [B. Dettagli dell'explainer](https://claude.ai/chat/Appendice_B_Explainer.md)
-- [C. Benchmark completi di Q1](https://claude.ai/chat/Appendice_C_Benchmark.md)
-- [D. Le dashboard di Kibana](https://claude.ai/chat/Appendice_D_Kibana.md)
-- [E. Privacy e GDPR](https://claude.ai/chat/Appendice_E_Privacy.md)
+- [A. Topic Kafka e formato dei messaggi](Appendice_A_Topic_e_messaggi.md)
+- [B. Dettagli dell'explainer](Appendice_B_Explainer.md)
+- [C. Benchmark completi di Q1](Appendice_C_Benchmark.md)
+- [D. Le dashboard di Kibana](Appendice_D_Kibana.md)
+- [E. Privacy e GDPR](Appendice_E_Privacy.md)
 
 ---
 
@@ -73,7 +73,7 @@ I filtri chiedono solo le operazioni sui post: like, repost e follow non vengono
 
 Un messaggio di Jetstream contiene molte più informazioni di quelle che servono. La pipeline segue un approccio a **lista bianca**: estrae solo i campi utili e scarta il resto, appiattendo il messaggio in una struttura semplice:
 
-```
+```json
 {
   "uri": "at://did:plc:ewvi7nxzyoun6zhxrhs64oiz/app.bsky.feed.post/3myfgj6zbwh2o",
   "did": "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
@@ -84,13 +84,13 @@ Un messaggio di Jetstream contiene molte più informazioni di quelle che servono
 }
 ```
 
-`uri` identifica il post, `did` l'autore (serve a contare gli autori distinti e a riconoscere lo spam), `time` decide in quale minuto cade il post e `text` è l'input del modello. Come orario si usa `time`, scritto da Jetstream, e non `createdAt`, che viene deciso dall'app dell'utente e può essere sbagliato. Tre campi facoltativi, `link_title`, `reply_parent_uri` e `quoted_uri`, non servono a calcolare il sentiment ma a spiegarlo: dicono quali notizie venivano condivise e quali post erano al centro della discussione. Il titolo del link non viene passato al modello, perché di solito è scritto da una testata e non dall'autore del post. Il formato completo dei messaggi è nell'[Appendice A](https://claude.ai/chat/Appendice_A_Topic_e_messaggi.md).
+`uri` identifica il post, `did` l'autore (serve a contare gli autori distinti e a riconoscere lo spam), `time` decide in quale minuto cade il post e `text` è l'input del modello. Come orario si usa `time`, scritto da Jetstream, e non `createdAt`, che viene deciso dall'app dell'utente e può essere sbagliato. Tre campi facoltativi, `link_title`, `reply_parent_uri` e `quoted_uri`, non servono a calcolare il sentiment ma a spiegarlo: dicono quali notizie venivano condivise e quali post erano al centro della discussione. Il titolo del link non viene passato al modello, perché di solito è scritto da una testata e non dall'autore del post. Il formato completo dei messaggi è nell'[Appendice A](Appendice_A_Topic_e_messaggi.md).
 
 ## 2.2 Affidabilità e privacy
 
 Jetstream consegna i record così come li scrivono le app, senza controllarli: capitano campi mancanti o inventati. La lista bianca rende la pipeline robusta, perché i campi sconosciuti vengono ignorati e un messaggio senza i campi indispensabili viene messo da parte per poterlo esaminare. Jetstream garantisce inoltre che ogni evento arrivi almeno una volta, non esattamente una volta, per cui la pipeline elimina i duplicati usando l'`uri`.
 
-Anche se pubblici, i post sono dati personali tutelati dal **GDPR**. La pipeline applica la minimizzazione dei dati e la limitazione della conservazione: tiene solo i campi necessari, scarta subito i post nelle altre lingue e cancella i singoli post dopo tre giorni. Restano senza scadenza solo le statistiche al minuto e gli alert. Queste scelte non bastano da sole a rendere il sistema conforme; le questioni aperte sono discusse nell'[Appendice E](https://claude.ai/chat/Appendice_E_Privacy.md).
+Anche se pubblici, i post sono dati personali tutelati dal **GDPR**. La pipeline applica la minimizzazione dei dati e la limitazione della conservazione: tiene solo i campi necessari, scarta subito i post nelle altre lingue e cancella i singoli post dopo tre giorni. Restano senza scadenza solo le statistiche al minuto e gli alert. Queste scelte non bastano da sole a rendere il sistema conforme; le questioni aperte sono discusse nell'[Appendice E](Appendice_E_Privacy.md).
 
 ---
 
@@ -100,7 +100,7 @@ Anche se pubblici, i post sono dati personali tutelati dal **GDPR**. La pipeline
 
 La pipeline è una catena di fasi collegate da Kafka: nessun componente parla direttamente con un altro, ma ognuno legge da un topic e scrive su un altro.
 
-![[pipe2.svg|pipline]]
+![pipeline](<pipe2.svg>)
 
 Il producer riceve i post da Bluesky e li passa a Logstash, che li controlla, li pulisce e li scrive su Kafka. Spark calcola il sentiment di ogni post (Q1), lo raggruppa con gli altri post dello stesso minuto (Q2) e confronta ogni minuto con il comportamento recente per trovare gli shock (Q3). Quando uno shock si conclude, l'explainer recupera i post di quel periodo e chiede a un LLM di spiegare cosa è successo. Tutto finisce in Elasticsearch e si visualizza con Kibana.
 
@@ -137,7 +137,7 @@ flowchart TD
     C -- sì --> RAW[(posts.raw)]
 ```
 
-Un evento **scartato per scelta** è corretto ma non interessa: cancellazioni e modifiche (interessa il momento in cui le persone scrivono), post senza testo e post che non dichiarano la lingua `en`. Viene solo conteggiato. Un **dato rotto**, per esempio senza autore o con un orario inesistente, viene invece messo da parte nel topic `posts.dlq`, una **dead letter queue**, insieme al motivo dello scarto, perché indica che qualcosa non va nella sorgente o nella pipeline. Ogni controllo ha un nome e Logstash conta quanti eventi passano da ciascuno, quindi dall'API di monitoraggio si sa in ogni momento quanti post sono stati scartati e perché. L'elenco completo dei controlli è nell'[Appendice A](https://claude.ai/chat/Appendice_A_Topic_e_messaggi.md).
+Un evento **scartato per scelta** è corretto ma non interessa: cancellazioni e modifiche (interessa il momento in cui le persone scrivono), post senza testo e post che non dichiarano la lingua `en`. Viene solo conteggiato. Un **dato rotto**, per esempio senza autore o con un orario inesistente, viene invece messo da parte nel topic `posts.dlq`, una **dead letter queue**, insieme al motivo dello scarto, perché indica che qualcosa non va nella sorgente o nella pipeline. Ogni controllo ha un nome e Logstash conta quanti eventi passano da ciascuno, quindi dall'API di monitoraggio si sa in ogni momento quanti post sono stati scartati e perché. L'elenco completo dei controlli è nell'[Appendice A](Appendice_A_Topic_e_messaggi.md).
 
 Il filtro sulla lingua viene fatto solo qui, così i post nelle altre lingue non entrano mai in Kafka. È volutamente semplice: un post che dichiara `en-GB` invece di `en` viene escluso, una perdita di circa lo 0,4% dei post in inglese in cambio di una regola chiara. I campi facoltativi sono trattati con più tolleranza: se l'indirizzo del post citato è malformato, il post perde solo quel campo.
 
@@ -145,15 +145,15 @@ Il filtro sulla lingua viene fatto solo qui, così i post nelle altre lingue non
 
 La creazione automatica dei topic è disattivata, così un errore di battitura nel nome di un topic produce un errore invece di creare in silenzio un topic che nessuno legge. I topic li crea `kafka-init`:
 
-|Topic|Scritto da|Letto da|Partizioni|Conservazione|Chiave|
+| Topic | Scritto da | Letto da | Partizioni | Conservazione | Chiave |
 |---|---|---|---|---|---|
-|`posts.raw`|Logstash|Q1|3|3 giorni|`uri`|
-|`posts.dlq`|Logstash|nessuno|1|3 giorni|nessuna|
-|`posts.enriched`|Q1|Q2, Logstash|3|3 giorni|`uri`|
-|`sentiment.1m`|Q2|Q3|1|illimitata|`window_start`|
-|`sentiment.monitor`|Q3|Logstash|1|illimitata|`window_start`|
-|`alerts`|Q3|Logstash, explainer|1|illimitata|`alert_id`|
-|`alerts.explained`|explainer|Logstash|1|illimitata|`alert_id`|
+| `posts.raw` | Logstash | Q1 | 3 | 3 giorni | `uri` |
+| `posts.dlq` | Logstash | nessuno | 1 | 3 giorni | nessuna |
+| `posts.enriched` | Q1 | Q2, Logstash | 3 | 3 giorni | `uri` |
+| `sentiment.1m` | Q2 | Q3 | 1 | illimitata | `window_start` |
+| `sentiment.monitor` | Q3 | Logstash | 1 | illimitata | `window_start` |
+| `alerts` | Q3 | Logstash, explainer | 1 | illimitata | `alert_id` |
+| `alerts.explained` | explainer | Logstash | 1 | illimitata | `alert_id` |
 
 I **topic dei post** hanno tre partizioni per poter essere letti in parallelo; l'ordine non conta, perché Q2 colloca ogni post nel minuto giusto in base al suo orario. La chiave `uri` manda tutte le copie dello stesso post nella stessa partizione. I **topic a valle** hanno una sola partizione, perché Kafka garantisce l'ordine solo dentro una partizione e qui l'ordine è essenziale: il detector deve vedere i minuti in ordine, ed Elasticsearch deve ricevere l'apertura di un episodio prima della sua chiusura.
 
@@ -185,12 +185,12 @@ Le alternative erano i metodi a dizionario come VADER, velocissimi ma imprecisi 
 
 Prima del modello, le menzioni diventano `@user` e i link `http`, come durante l'addestramento. I post sono brevi, in media circa 28 token, e il limite di 256 token ne taglia solo lo 0,1%. Il modello restituisce tre probabilità che sommano a 1, da cui Q1 ricava l'**etichetta** (`sentiment_label`), cioè la classe più probabile, e il **punteggio** $s = p_{pos} - p_{neg}$, tra -1 e +1:
 
-|Post (esempi illustrativi)|$p_{neg}$|$p_{neu}$|$p_{pos}$|$s$|
+| Post (esempi illustrativi) | $p_{neg}$ | $p_{neu}$ | $p_{pos}$ | $s$ |
 |---|---|---|---|---|
-|"This is the best day of my life!!"|0,01|0,03|0,96|+0,95|
-|"The meeting is at 3pm"|0,05|0,90|0,05|0,00|
-|"Not sure how I feel about the new update"|0,30|0,55|0,15|-0,15|
-|"I can't believe they did this. Disgusting."|0,94|0,05|0,01|-0,93|
+| "This is the best day of my life!!" | 0,01 | 0,03 | 0,96 | +0,95 |
+| "The meeting is at 3pm" | 0,05 | 0,90 | 0,05 | 0,00 |
+| "Not sure how I feel about the new update" | 0,30 | 0,55 | 0,15 | -0,15 |
+| "I can't believe they did this. Disgusting." | 0,94 | 0,05 | 0,01 | -0,93 |
 
 Il punteggio continuo è la grandezza su cui lavora tutto il resto. Con la sola etichetta un post appena negativo e uno furioso avrebbero lo stesso peso; con il punteggio la media riflette anche l'intensità dei toni ed è molto più sensibile ai cambiamenti. L'etichetta resta utile per calcolare le quote di post negativi e positivi.
 
@@ -218,15 +218,15 @@ Un minuto è un compromesso. Con circa 1800 post al minuto la media è già stab
 
 Per ogni finestra Q2 calcola:
 
-|Campo|Cosa contiene|
+| Campo | Cosa contiene |
 |---|---|
-|`window_start`, `window_end`|inizio e fine della finestra, in UTC|
-|`n_posts`|numero di post|
-|`n_authors`|numero di autori distinti (stima)|
-|`mean_sentiment`|media del punteggio $s$: la grandezza osservata dal detector|
-|`std_sentiment`|deviazione standard del punteggio|
-|`share_negative`, `share_positive`|quote di post negativi e positivi|
-|`model`|modello con cui è stato calcolato il sentiment|
+| `window_start`, `window_end` | inizio e fine della finestra, in UTC |
+| `n_posts` | numero di post |
+| `n_authors` | numero di autori distinti (stima) |
+| `mean_sentiment` | media del punteggio $s$: la grandezza osservata dal detector |
+| `std_sentiment` | deviazione standard del punteggio |
+| `share_negative`, `share_positive` | quote di post negativi e positivi |
+| `model` | modello con cui è stato calcolato il sentiment |
 
 `n_authors` è una **stima** calcolata con HyperLogLog, con un errore intorno al 2%: Spark non permette un conteggio esatto di valori distinti in streaming, e per riconoscere lo spam non serve. Le quote aiutano a leggere la media: nella sessione analizzata i post negativi (29,7%) erano più dei positivi (28,1%), eppure la media era leggermente positiva, perché i post positivi erano in media più decisi.
 
@@ -292,7 +292,7 @@ flowchart TD
 
 La baseline deve seguire i cambiamenti lenti, come il calo del volume quando in America è notte, ma non inseguire quelli improvvisi. Il detector la calcola con una **media mobile esponenziale** (EWMA): a ogni finestra valida la media si sposta di una frazione $\alpha$ verso il nuovo valore $x$, e con una formula simile si stima la varianza:
 
-$$\delta = x - \mu \qquad \mu_{nuova} = \mu + \alpha,\delta \qquad var_{nuova} = (1 - \alpha)\left(var + \alpha,\delta^2\right)$$
+$$\delta = x - \mu \qquad \mu_{nuova} = \mu + \alpha\,\delta \qquad var_{nuova} = (1 - \alpha)\left(var + \alpha\,\delta^2\right)$$
 
 Con $\alpha = 0{,}03$ il peso di una finestra si dimezza dopo circa 23 minuti, e la baseline "ricorda" circa l'ultima ora. Una media su tutta la storia confronterebbe la notte con la sera, e Bluesky ha un ciclo giornaliero marcato; una media sugli ultimi $N$ minuti si adatterebbe allo stesso modo ma dovrebbe ricordare $N$ valori, mentre la EWMA ne usa due per grandezza. La scelta di $\alpha$ è un compromesso: grande, la baseline insegue gli shock; piccolo, segue male il ciclo giornaliero.
 
@@ -313,11 +313,11 @@ Un evento reale di solito produce due segnali insieme: il tono cambia e molte pi
 
 **Perché queste soglie.** Con 1440 confronti al giorno qualche minuto supererà la soglia per caso. Se gli z-score fossero gaussiani e indipendenti, i falsi allarmi attesi al giorno sarebbero $1440 \cdot P(\lvert Z \rvert > k)$:
 
-|Soglia $k$|$P(\lvert Z \rvert > k)$|Falsi allarmi attesi al giorno|
+| Soglia $k$ | $P(\lvert Z \rvert > k)$ | Falsi allarmi attesi al giorno |
 |---|---|---|
-|3|0,0027|circa 3,9|
-|3,5|0,00047|circa 0,7|
-|4|0,00006|circa 0,09|
+| 3 | 0,0027 | circa 3,9 |
+| 3,5 | 0,00047 | circa 0,7 |
+| 4 | 0,00006 | circa 0,09 |
 
 Con $k = 3{,}5$ ci si aspetta meno di un falso allarme al giorno, mentre quattro al giorno insegnerebbero presto a ignorare gli avvisi. La regola moderata aggiunge un contributo trascurabile. Nella realtà i due z-score non sono indipendenti e le code sono più pesanti di quelle gaussiane, quindi questi numeri sono un limite inferiore da verificare sui dati (capitolo 9). Nella sessione reale la deviazione standard della baseline era circa 0,0165: una soglia di 3,5 corrisponde a uno spostamento della media di circa 0,06 in un minuto.
 
@@ -331,14 +331,14 @@ Prima di qualsiasi decisione il detector controlla situazioni che non hanno null
 
 **Controlli di qualità.** Il detector applica sei controlli, in quest'ordine; il primo che fallisce determina il campo `skip_reason`:
 
-|Motivo|Condizione|Perché|
+| Motivo | Condizione | Perché |
 |---|---|---|
-|`startup`|prima finestra in assoluto per il modello|l'ingestione è partita a metà minuto|
-|`after_gap`|prima finestra dopo un buco|l'ingestione è ripresa a metà minuto|
-|`partial`|a warmup finito, meno della metà del volume tipico|finestra incompleta, per esempio l'ultima prima di un'interruzione|
-|`low_volume`|meno di 300 post|la media è troppo instabile|
-|`low_authors`|meno di 250 autori distinti|troppe poche persone per parlare di umore collettivo|
-|`low_diversity`|rapporto autori/post sotto 0,8|pochi account producono molti post: probabile spam|
+| `startup` | prima finestra in assoluto per il modello | l'ingestione è partita a metà minuto |
+| `after_gap` | prima finestra dopo un buco | l'ingestione è ripresa a metà minuto |
+| `partial` | a warmup finito, meno della metà del volume tipico | finestra incompleta, per esempio l'ultima prima di un'interruzione |
+| `low_volume` | meno di 300 post | la media è troppo instabile |
+| `low_authors` | meno di 250 autori distinti | troppe poche persone per parlare di umore collettivo |
+| `low_diversity` | rapporto autori/post sotto 0,8 | pochi account producono molti post: probabile spam |
 
 Una finestra scartata produce comunque la sua riga su `sentiment.monitor`, ma non può essere uno shock, non aggiorna la baseline e non conta per gli episodi: uno spam di bot non deve alzare il volume tipico, e una finestra incompleta non deve abbassarlo. La soglia di 300 post viene dall'errore di campionamento della media, circa $0{,}55/\sqrt{300} \approx 0{,}03$. Il rapporto autori/post sui dati reali è intorno a 0,9: un account che pubblica decine di post al minuto lo abbassa, mentre un evento reale lo mantiene alto perché reagiscono molte persone diverse. Il controllo `partial` vale solo dopo il warmup, perché prima il volume tipico dipende da poche finestre e innescherebbe lo stesso circolo vizioso dei buchi.
 
@@ -374,24 +374,25 @@ Una sola finestra basta per aprire un episodio: chiederne due aggiungerebbe un m
 
 La tabella mostra un episodio prodotto dal codice del detector su una serie sintetica costruita apposta: sentiment tipico intorno a 0,05, circa 2000 post al minuto, rapporto autori/post 0,9.
 
-|Finestra|Post|Autori/post|Sentiment|Baseline|Dev. std|$z_s$|$z_v$|Anomala|Scarto|Effetto|
+| Finestra | Post | Autori/post | Sentiment | Baseline | Dev. std | $z_s$ | $z_v$ | Anomala | Scarto | Effetto |
 |---|---|---|---|---|---|---|---|---|---|---|
-|23:41|2091|0,90|0,019|0,051|0,010|-3,13|0,87|no|–|sopra 2,5 ma senza volume: normale|
-|23:42|2100|0,90|-0,075|0,050|0,011|-11,60|0,92|**sì**|–|**apertura**, messaggio `open`|
-|23:43|2600|0,90|-0,060|0,048|0,012|-8,77|5,17|sì|–|prosegue|
-|23:44|3100|0,90|-0,035|0,047|0,014|-5,77|8,58|sì|–|prosegue|
-|23:45|2500|0,90|-0,020|0,046|0,016|-4,00|4,17|sì|–|prosegue; ultima anomala|
-|23:46|2200|0,90|0,000|0,044|0,019|-2,33|1,35|no|–|conteggio = 1|
-|23:47|2400|0,70|-0,030|0,043|0,020|-3,62|2,82|no|`low_diversity`|scartata: conteggio resta 1|
-|23:48|2100|0,90|0,030|0,043|0,020|-0,63|0,47|no|–|conteggio = 2|
-|23:49|1863|0,90|0,044|0,042|0,020|0,10|-1,67|no|–|conteggio = 3|
-|23:50|2050|0,90|0,036|0,042|0,020|-0,32|0,08|no|–|conteggio = 4|
-|23:51|1996|0,90|0,061|0,042|0,019|1,00|-0,39|no|–|conteggio = 5: **chiusura**, `closed`|
-|23:52|2042|0,90|0,068|0,043|0,019|1,30|0,02|no|–|nessun episodio|
+| 23:41 | 2091 | 0,90 | 0,019 | 0,051 | 0,010 | -3,13 | 0,87 | no | – | sopra 2,5 ma senza volume: normale |
+| 23:42 | 2100 | 0,90 | -0,075 | 0,050 | 0,011 | -11,60 | 0,92 | **sì** | – | **apertura**, messaggio `open` |
+| 23:43 | 2600 | 0,90 | -0,060 | 0,048 | 0,012 | -8,77 | 5,17 | sì | – | prosegue |
+| 23:44 | 3100 | 0,90 | -0,035 | 0,047 | 0,014 | -5,77 | 8,58 | sì | – | prosegue |
+| 23:45 | 2500 | 0,90 | -0,020 | 0,046 | 0,016 | -4,00 | 4,17 | sì | – | prosegue; ultima anomala |
+| 23:46 | 2200 | 0,90 | 0,000 | 0,044 | 0,019 | -2,33 | 1,35 | no | – | conteggio = 1 |
+| 23:47 | 2400 | 0,70 | -0,030 | 0,043 | 0,020 | -3,62 | 2,82 | no | `low_diversity` | scartata: conteggio resta 1 |
+| 23:48 | 2100 | 0,90 | 0,030 | 0,043 | 0,020 | -0,63 | 0,47 | no | – | conteggio = 2 |
+| 23:49 | 1863 | 0,90 | 0,044 | 0,042 | 0,020 | 0,10 | -1,67 | no | – | conteggio = 3 |
+| 23:50 | 2050 | 0,90 | 0,036 | 0,042 | 0,020 | -0,32 | 0,08 | no | – | conteggio = 4 |
+| 23:51 | 1996 | 0,90 | 0,061 | 0,042 | 0,019 | 1,00 | -0,39 | no | – | conteggio = 5: **chiusura**, `closed` |
+| 23:52 | 2042 | 0,90 | 0,068 | 0,043 | 0,019 | 1,30 | 0,02 | no | – | nessun episodio |
 
-Alle 23:41 il sentiment supera la soglia moderata, ma senza la conferma del volume il minuto non è anomalo. Alle 23:42 crolla di più di undici deviazioni standard e l'episodio si apre; tra le 23:43 e le 23:45 lo shock continua insieme a un'esplosione del volume. Alle 23:46 lo z-score è sotto entrambe le soglie e inizia il conteggio. Alle 23:47 lo z-score sarebbe di nuovo sopra soglia, ma il rapporto autori/post di 0,70 fa scartare la finestra come probabile spam: non riapre l'episodio e non fa avanzare il conteggio. Alle 23:51, dopo cinque finestre normali, l'episodio si chiude, con inizio alle 23:42, fine alle 23:46, picco di -11,60 e quattro finestre anomale. Tutte le finestre dalle 23:42 alle 23:51 portano su `sentiment.monitor` lo stesso identificativo dell'episodio. Il formato completo dei messaggi è nell'[Appendice A](https://claude.ai/chat/Appendice_A_Topic_e_messaggi.md).
+Alle 23:41 il sentiment supera la soglia moderata, ma senza la conferma del volume il minuto non è anomalo. Alle 23:42 crolla di più di undici deviazioni standard e l'episodio si apre; tra le 23:43 e le 23:45 lo shock continua insieme a un'esplosione del volume. Alle 23:46 lo z-score è sotto entrambe le soglie e inizia il conteggio. Alle 23:47 lo z-score sarebbe di nuovo sopra soglia, ma il rapporto autori/post di 0,70 fa scartare la finestra come probabile spam: non riapre l'episodio e non fa avanzare il conteggio. Alle 23:51, dopo cinque finestre normali, l'episodio si chiude, con inizio alle 23:42, fine alle 23:46, picco di -11,60 e quattro finestre anomale. Tutte le finestre dalle 23:42 alle 23:51 portano su `sentiment.monitor` lo stesso identificativo dell'episodio. Il formato completo dei messaggi è nell'[Appendice A](Appendice_A_Topic_e_messaggi.md).
 
-![[Università/TAP/Progetto/Relazione/assets/Pasted Image.png]] _Figura 6.1 – Sentiment medio minuto per minuto durante un episodio, visualizzato in Kibana. I dati in arrivo erano quelli del producer sintetico._
+![Figura 6.1](<Pasted Image.png>)
+*Figura 6.1 – Sentiment medio minuto per minuto durante un episodio, visualizzato in Kibana. I dati in arrivo erano quelli del producer sintetico.*
 
 ## 6.8 La baseline durante uno shock
 
@@ -399,7 +400,7 @@ Aggiornare la baseline normalmente durante uno shock la "contaminerebbe" subito:
 
 Ho scelto una via di mezzo, la **winsorizzazione**: prima dell'aggiornamento lo scostamento viene tagliato a 3,5 deviazioni standard, la stessa soglia dello shock forte:
 
-$$\delta_w = \max\left(-3{,}5,\sigma,\ \min\left(3{,}5,\sigma,\ \delta\right)\right)$$
+$$\delta_w = \max\left(-3{,}5\,\sigma,\ \min\left(3{,}5\,\sigma,\ \delta\right)\right)$$
 
 Un valore normale non viene toccato, mentre una singola finestra estrema può spostare la media al massimo di circa un decimo di deviazione standard. Il taglio non si applica durante il warmup, quando la varianza parte da zero.
 
@@ -436,7 +437,7 @@ Mandare al modello tutti i post sarebbe costoso, lento e oltre i limiti del pian
 
 ## 7.3 Il prompt e il modello
 
-Il prompt è in italiano e ha una struttura fissa: ruolo e regole, dati dello shock, quattro evidenze. Le regole servono a limitare i difetti più noti dei modelli linguistici: basarsi solo sulle evidenze, per evitare **allucinazioni**; dichiarare chiaramente quando le evidenze sono deboli o fanno pensare a spam; ricordare che i termini sono radici inglesi; ignorare qualunque istruzione contenuta nei post, come difesa contro la **prompt injection**; scrivere da tre a sei frasi di testo semplice. Il modello configurato è `gemini-3.8-flash`, una versione veloce ed economica adatta a riassumere. Un prompt completo di esempio e le impostazioni della chiamata sono nell'[Appendice B](https://claude.ai/chat/Appendice_B_Explainer.md).
+Il prompt è in italiano e ha una struttura fissa: ruolo e regole, dati dello shock, quattro evidenze. Le regole servono a limitare i difetti più noti dei modelli linguistici: basarsi solo sulle evidenze, per evitare **allucinazioni**; dichiarare chiaramente quando le evidenze sono deboli o fanno pensare a spam; ricordare che i termini sono radici inglesi; ignorare qualunque istruzione contenuta nei post, come difesa contro la **prompt injection**; scrivere da tre a sei frasi di testo semplice. Il modello configurato è `gemini-3.8-flash`, una versione veloce ed economica adatta a riassumere. Un prompt completo di esempio e le impostazioni della chiamata sono nell'[Appendice B](Appendice_B_Explainer.md).
 
 Per un episodio come quello delle 23:42, con termini come "earthquak", "tsunami" ed "evacu", una risposta coerente sarebbe: "Il calo del sentiment sembra legato a un forte terremoto seguito da un'allerta tsunami. I termini più insoliti riguardano la magnitudo, l'allerta e l'evacuazione delle coste, e il link più condiviso è un articolo sul sisma…".
 
@@ -493,14 +494,14 @@ Fino a quel momento non usavo la grafica integrata: senza una GPU Nvidia pensavo
 
 Una GPU lavora bene quando i dati hanno sempre le stesse dimensioni, mentre ogni forma nuova va prima compilata, con un costo di secondi. Ho quindi fatto in modo che vedesse poche forme fisse: la lunghezza di ogni gruppo viene arrotondata a una lista di valori (da 16 a 256 token) e ogni gruppo viene sempre completato a 32 testi. All'avvio Q1 compila tutte le forme e le salva su disco, così dal secondo avvio questa fase è quasi immediata.
 
-|Motore|Velocità|Memoria|Etichette uguali|Spost. medio|Spost. negativi|Spost. positivi|
+| Motore | Velocità | Memoria | Etichette uguali | Spost. medio | Spost. negativi | Spost. positivi |
 |---|---|---|---|---|---|---|
-|PyTorch fp32 (riferimento)|12,9 post/s|1,6 GB|100%|0|0|0|
-|OpenVINO int8 (SQ 0,75) su CPU|43–46 post/s|1,4 GB|98,1%|+0,002|+0,004|-0,002|
-|**OpenVINO fp32 su GPU**|**74,6 post/s**|**1,1 GB**|**99,8%**|**0,000**|**0,000**|**0,000**|
-|OpenVINO int8 (SQ 0,75) su GPU|66,9 post/s|1,1 GB|97,8%|0,000|-0,027|+0,035|
+| PyTorch fp32 (riferimento) | 12,9 post/s | 1,6 GB | 100% | 0 | 0 | 0 |
+| OpenVINO int8 (SQ 0,75) su CPU | 43–46 post/s | 1,4 GB | 98,1% | +0,002 | +0,004 | -0,002 |
+| **OpenVINO fp32 su GPU** | **74,6 post/s** | **1,1 GB** | **99,8%** | **0,000** | **0,000** | **0,000** |
+| OpenVINO int8 (SQ 0,75) su GPU | 66,9 post/s | 1,1 GB | 97,8% | 0,000 | -0,027 | +0,035 |
 
-Il modello **fp32 sulla GPU** è risultato il più veloce, quasi sei volte PyTorch, e anche il più fedele tra quelli accelerati: sulla GPU OpenVINO calcola a 16 bit, una precisione molto più alta dell'int8. L'**int8 sulla GPU** è stato scartato: è più lento e rende i post negativi più negativi e i positivi più positivi, facendo sembrare gli shock più forti di quanto sono. Lo spostamento medio, praticamente zero, l'avrebbe fatto sembrare perfetto, perché i due errori si compensano. È la seconda volta che il controllo per classe ha evitato una scelta sbagliata. Le tabelle di tutte le prove sono nell'[Appendice C](https://claude.ai/chat/Appendice_C_Benchmark.md).
+Il modello **fp32 sulla GPU** è risultato il più veloce, quasi sei volte PyTorch, e anche il più fedele tra quelli accelerati: sulla GPU OpenVINO calcola a 16 bit, una precisione molto più alta dell'int8. L'**int8 sulla GPU** è stato scartato: è più lento e rende i post negativi più negativi e i positivi più positivi, facendo sembrare gli shock più forti di quanto sono. Lo spostamento medio, praticamente zero, l'avrebbe fatto sembrare perfetto, perché i due errori si compensano. È la seconda volta che il controllo per classe ha evitato una scelta sbagliata. Le tabelle di tutte le prove sono nell'[Appendice C](Appendice_C_Benchmark.md).
 
 ## 8.6 Il risultato
 
@@ -518,43 +519,49 @@ I capitoli precedenti descrivono come la pipeline dovrebbe comportarsi; questo r
 
 La pipeline completa ha girato domenica 8 novembre 2026, dalle 18 a mezzanotte ora italiana, cioè nel pomeriggio americano. Q1 usava OpenVINO sulla GPU integrata e il detector i parametri del capitolo 6. Alla fine ho esportato da Elasticsearch i tre indici in file Parquet e ho analizzato i dati, insieme al log di velocità di Q1, in due notebook Jupyter: uno per la sessione e uno per gli esperimenti sul detector.
 
-|Cosa|Quanto|
+| Cosa | Quanto |
 |---|---|
-|Finestre di un minuto|350, dalle 17:57 alle 23:46|
-|Post elaborati|626.109|
-|Autori distinti|172.416|
-|Micro-batch di Q1 analizzati|2107|
-|Alert|nessuno|
+| Finestre di un minuto | 350, dalle 17:57 alle 23:46 |
+| Post elaborati | 626.109 |
+| Autori distinti | 172.416 |
+| Micro-batch di Q1 analizzati | 2107 |
+| Alert | nessuno |
 
 ## 9.2 La pipeline regge ed è coerente
 
 La velocità mediana di Q1 dentro Spark è stata di **74,9 post al secondo**, praticamente uguale al benchmark. I post arrivavano in media a 29,5 al secondo, quindi Q1 ha lavorato a circa il 40% delle sue possibilità, con un margine di due volte e mezzo. Solo in un micro-batch su mille Q1 è stato più lento degli arrivi, e i micro-batch sono durati in mediana 3,9 secondi su un intervallo di 10.
 
-![[Pasted image 20261110010938.png]] _Figura 9.1 – Velocità di elaborazione di Q1 (blu) e velocità di arrivo dei post (arancione), micro-batch per micro-batch. La linea tratteggiata è la velocità misurata nel benchmark._
+![Figura 9.1](<Pasted image 20261110010938.png>)
+*Figura 9.1 – Velocità di elaborazione di Q1 (blu) e velocità di arrivo dei post (arancione), micro-batch per micro-batch. La linea tratteggiata è la velocità misurata nel benchmark.*
 
 L'unico picco degli arrivi, vicino a 100 post al secondo, segue due micro-batch quasi vuoti ed è probabilmente un piccolo accumulo, non un vero picco di traffico. Le prime righe del log mostravano circa 45 post al secondo, e avevo ipotizzato un costo fisso di Spark per ogni micro-batch; sui dati completi l'ipotesi non regge, e quei valori erano solo il riscaldamento della GPU.
 
 Tutti i 350 minuti attesi sono presenti, senza buchi e senza duplicati; l'unica finestra scartata è la prima, `startup`. Contando i post minuto per minuto dall'indice e confrontandoli con `n_posts` di Q2, i valori coincidono in 349 minuti su 350, e nell'unico minuto diverso manca un solo post. Nell'indice non c'è nessun `uri` duplicato. Non ci sono stati segni di spam: il rapporto autori/post è rimasto in mediana a 0,92 e mai sotto 0,87.
 
-![[Pasted image 20261110011146.png]] _Figura 9.2 – Rapporto tra autori e post, minuto per minuto. La linea rossa è la soglia sotto la quale il detector scarta la finestra come probabile spam._
+![Figura 9.2](<Pasted image 20261110011146.png>)
+*Figura 9.2 – Rapporto tra autori e post, minuto per minuto. La linea rossa è la soglia sotto la quale il detector scarta la finestra come probabile spam.*
 
 ## 9.3 Il traffico e il sentiment
 
 Il traffico è stato molto stabile: dalle 18 in poi la media oraria è rimasta tra 28,5 e 30,4 post al secondo, coerente con i 32,8 misurati durante l'ottimizzazione.
 
-![[Pasted image 20261110011241.png]] _Figura 9.3 – Post in inglese al secondo, minuto per minuto (blu), e volume tipico stimato dalla baseline del detector (arancione)._
+![Figura 9.3](<Pasted image 20261110011241.png>)
+*Figura 9.3 – Post in inglese al secondo, minuto per minuto (blu), e volume tipico stimato dalla baseline del detector (arancione).*
 
 Nel grafico si notano piccoli picchi isolati quasi sempre allo scoccare dell'ora. Un'ipotesi plausibile, non verificata, è che si tratti di account automatici che pubblicano a orari fissi; negli stessi minuti la quota di post negativi scende di colpo (figura 9.5), come ci si aspetterebbe da messaggi automatici di tono neutro. Sono anche un esempio concreto della regola del capitolo 6: un aumento di volume senza cambiamento del sentiment non è uno shock, e infatti non sono stati segnalati.
 
 Il sentiment medio è sceso lentamente, da circa 0,027 nell'ora delle 18 a valori tra 0,014 e 0,019 nelle ore successive: un andamento della serata che la baseline ha seguito senza problemi.
 
-![[Pasted image 20261110011353.png]] _Figura 9.4 – Sentiment medio minuto per minuto (blu), baseline del detector (arancione) e banda di ±3,5 deviazioni standard intorno alla baseline (azzurro). Una finestra fuori dalla banda sarebbe uno shock forte._
+![Figura 9.4](<Pasted image 20261110011353.png>)
+*Figura 9.4 – Sentiment medio minuto per minuto (blu), baseline del detector (arancione) e banda di ±3,5 deviazioni standard intorno alla baseline (azzurro). Una finestra fuori dalla banda sarebbe uno shock forte.*
 
 Il sentiment oscilla ma resta sempre dentro la banda. All'inizio la banda è più larga, perché durante il warmup la variabilità stimata si basa su poche finestre. Tra le etichette prevalgono i post neutri (42,2%), seguiti da negativi (29,7%) e positivi (28,1%).
 
-![[Pasted image 20261110011457.png]] _Figura 9.5 – Quota di post negativi (rosso) e positivi (verde), minuto per minuto._
+![Figura 9.5](<Pasted image 20261110011457.png>)
+*Figura 9.5 – Quota di post negativi (rosso) e positivi (verde), minuto per minuto.*
 
-![[Pasted image 20261110011524.png]] _Figura 9.6 – Distribuzione del punteggio di sentiment dei singoli post della sessione._
+![Figura 9.6](<Pasted image 20261110011524.png>)
+*Figura 9.6 – Distribuzione del punteggio di sentiment dei singoli post della sessione.*
 
 La distribuzione dei punteggi ha tre picchi: vicino a zero e vicino ai due estremi. La variabilità dei singoli post è alta, con una deviazione standard intorno a 0,6, ma la media di quasi duemila post al minuto è stabile: è questo che permette al detector di accorgersi di spostamenti di pochi centesimi. Infine, il 59,1% dei post è una risposta, il 10,0% cita un altro post e il 9,5% condivide un link: Bluesky è soprattutto un luogo di conversazione, il che conferma l'utilità dei post più citati come evidenza per l'explainer.
 
@@ -562,13 +569,14 @@ La distribuzione dei punteggi ha tre picchi: vicino a zero e vicino ai due estre
 
 In sei ore il detector non ha aperto nessun episodio. Per capire se fosse poco sensibile ho guardato la distribuzione degli z-score: se la baseline stima bene il comportamento normale, `z_sentiment` dovrebbe avere media vicina a 0 e deviazione standard vicina a 1. Sulle 309 finestre attive la media è stata -0,05 e la deviazione standard **1,02**. Anche il numero di finestre oltre ogni soglia è quello atteso per puro caso:
 
-|Soglia|Finestre osservate|Attese per puro caso|
+| Soglia | Finestre osservate | Attese per puro caso |
 |---|---|---|
-|$\lvert z \rvert > 2$|15|circa 14|
-|$\lvert z \rvert > 2{,}5$|2|circa 4|
-|$\lvert z \rvert > 3{,}5$|0|meno di 1|
+| $\lvert z \rvert > 2$ | 15 | circa 14 |
+| $\lvert z \rvert > 2{,}5$ | 2 | circa 4 |
+| $\lvert z \rvert > 3{,}5$ | 0 | meno di 1 |
 
-![[Pasted image 20261110011749.png]] _Figura 9.7 – A sinistra, z-score del sentiment minuto per minuto; le linee rosse continue sono le soglie dello shock forte (±3,5), quelle tratteggiate le soglie dello shock moderato (±2,5). A destra, la distribuzione degli z-score delle finestre attive._
+![Figura 9.7](<Pasted image 20261110011749.png>)
+*Figura 9.7 – A sinistra, z-score del sentiment minuto per minuto; le linee rosse continue sono le soglie dello shock forte (±3,5), quelle tratteggiate le soglie dello shock moderato (±2,5). A destra, la distribuzione degli z-score delle finestre attive.*
 
 Le due finestre oltre 2,5 non erano accompagnate da un'esplosione del volume, e l'unico picco di volume non aveva un sentiment anomalo. Il detector si è comportato come doveva. Il warmup è durato 41 finestre: la prima scartata più le 40 valide previste.
 
@@ -582,17 +590,18 @@ Su una copia della serie il sentiment medio viene spostato di una quantità fiss
 
 **Quanto deve essere grande uno shock.** Con la deviazione tipica della baseline di circa 0,0165, ho spostato il sentiment per cinque minuti:
 
-|Spostamento|In deviazioni standard|Solo sentiment|Con volume +50%|
+| Spostamento | In deviazioni standard | Solo sentiment | Con volume +50% |
 |---|---|---|---|
-|-0,02|1,2|7%|37%|
-|-0,03|1,8|23%|67%|
-|-0,04|2,4|43%|87%|
-|-0,05|3,0|60%|100%|
-|-0,06|3,6|83%|100%|
-|-0,08|4,8|100%|100%|
-|-0,10|6,1|100%|100%|
+| -0,02 | 1,2 | 7% | 37% |
+| -0,03 | 1,8 | 23% | 67% |
+| -0,04 | 2,4 | 43% | 87% |
+| -0,05 | 3,0 | 60% | 100% |
+| -0,06 | 3,6 | 83% | 100% |
+| -0,08 | 4,8 | 100% | 100% |
+| -0,10 | 6,1 | 100% | 100% |
 
-![[Pasted image 20261110012201.png]] _Figura 9.8 – Percentuale di shock rilevati in funzione dell'ampiezza dello spostamento, con il solo sentiment (arancione) e con il volume aumentato del 50% (blu)._
+![Figura 9.8](<Pasted image 20261110012201.png>)
+*Figura 9.8 – Percentuale di shock rilevati in funzione dell'ampiezza dello spostamento, con il solo sentiment (arancione) e con il volume aumentato del 50% (blu).*
 
 Con il solo sentiment il detector vede quasi sempre gli shock da -0,06 in su; quando sale anche il volume, la regola moderata abbassa molto la soglia e già da -0,04 lo shock viene visto quasi sempre. Per dare un'idea, uno spostamento di 0,05 corrisponde a circa il 6% di tutti i post in inglese di quel minuto che passano da neutri a decisamente negativi: il detector globale vede solo eventi di grande portata.
 
@@ -604,21 +613,23 @@ Con il solo sentiment il detector vede quasi sempre gli shock da -0,06 in su; qu
 
 **Uno shock prolungato.** Ho inserito uno shock di 10 minuti in 20 punti della serata. Con -0,10 ha sempre aperto un episodio, con -0,06 in 17 casi su 20. Ogni shock ha prodotto un solo episodio, quasi sempre aperto sulla prima finestra, e nessun episodio si è chiuso per inversione. L'episodio però finisce molto prima dello shock: con -0,10 solo 4 finestre su 10 vengono giudicate anomale (fine mediana 6 minuti prima di quella vera), con -0,06 di solito una sola. È l'effetto previsto nella sezione 6.8: la banda si allarga di circa il 15% al minuto e un sentiment ancora basso smette presto di essere sorprendente.
 
-![[Pasted image 20261110012726.png]] _Figura 9.9 – Un esempio di shock di -0,10 per 10 minuti (area rossa). In alto, sentiment medio, baseline e banda di ±3,5 deviazioni standard; in basso, lo z-score, con le finestre anomale in rosso e l'episodio fino alla chiusura in arancione. Gli orari sono in UTC._
+![Figura 9.9](<Pasted image 20261110012726.png>)
+*Figura 9.9 – Un esempio di shock di -0,10 per 10 minuti (area rossa). In alto, sentiment medio, baseline e banda di ±3,5 deviazioni standard; in basso, lo z-score, con le finestre anomale in rosso e l'episodio fino alla chiusura in arancione. Gli orari sono in UTC.*
 
 La conseguenza pratica è che l'inizio di un episodio è affidabile, mentre la fine indica quando lo shock ha smesso di essere una sorpresa. L'explainer, che analizza l'intervallo tra inizio e fine, per uno shock di 10 minuti vede quindi solo i primi 4 minuti circa: di solito basta, perché contengono già migliaia di post.
 
 **Due shock vicini.** Ho inserito due shock uguali di cinque minuti a distanze crescenti, confrontandoli con lo stesso secondo shock inserito da solo:
 
-|Distanza|Secondo shock visto (-0,08)|Da solo (-0,08)|Secondo shock visto (-0,06)|Da solo (-0,06)|Variabilità della baseline (-0,08)|
+| Distanza | Secondo shock visto (-0,08) | Da solo (-0,08) | Secondo shock visto (-0,06) | Da solo (-0,06) | Variabilità della baseline (-0,08) |
 |---|---|---|---|---|---|
-|20 minuti|25%|100%|15%|95%|×1,56|
-|40 minuti|70%|100%|55%|85%|×1,36|
-|60 minuti|90%|100%|60%|85%|×1,20|
-|90 minuti|95%|100%|60%|85%|×1,09|
-|120 minuti|100%|100%|75%|80%|×1,04|
+| 20 minuti | 25% | 100% | 15% | 95% | ×1,56 |
+| 40 minuti | 70% | 100% | 55% | 85% | ×1,36 |
+| 60 minuti | 90% | 100% | 60% | 85% | ×1,20 |
+| 90 minuti | 95% | 100% | 60% | 85% | ×1,09 |
+| 120 minuti | 100% | 100% | 75% | 80% | ×1,04 |
 
-![[Pasted image 20261110013023.png]] _Figura 9.10 – Percentuale di secondi shock rilevati in funzione della distanza dal primo (linee continue), confrontata con lo stesso shock inserito da solo (linee tratteggiate)._
+![Figura 9.10](<Pasted image 20261110013023.png>)
+*Figura 9.10 – Percentuale di secondi shock rilevati in funzione della distanza dal primo (linee continue), confrontata con lo stesso shock inserito da solo (linee tratteggiate).*
 
 Dopo uno shock il detector resta meno sensibile per circa un'ora: a 20 minuti di distanza la variabilità della baseline è ancora una volta e mezza quella normale, e il secondo shock da -0,08 viene visto solo una volta su quattro. Quando viene visto, apre sempre un episodio separato. Due eventi distinti a meno di un'ora di distanza rischiano quindi di produrre un solo alert.
 
@@ -634,17 +645,18 @@ Nonostante questi limiti, la sessione conferma le scelte principali: Q1 regge il
 
 Kibana è la finestra attraverso cui una persona osserva i risultati. Legge da Elasticsearch e non partecipa ai calcoli: se viene spento, la pipeline continua a lavorare. Legge tre indici, preparati da `es-init`:
 
-|Indice|Contenuto|Campo tempo|Conservazione|
+| Indice | Contenuto | Campo tempo | Conservazione |
 |---|---|---|---|
-|`posts-AAAA.MM.GG`|un documento per post, con testo e sentiment|`time`|3 giorni|
-|`sentiment-1m`|un documento per minuto, con le statistiche di Q2 e lo stato del detector|`window_start`|per sempre|
-|`alerts`|un documento per episodio, con la spiegazione dell'explainer|`start`|per sempre|
+| `posts-AAAA.MM.GG` | un documento per post, con testo e sentiment | `time` | 3 giorni |
+| `sentiment-1m` | un documento per minuto, con le statistiche di Q2 e lo stato del detector | `window_start` | per sempre |
+| `alerts` | un documento per episodio, con la spiegazione dell'explainer | `start` | per sempre |
 
 I post sono divisi in un indice al giorno, scelto in base al campo `time`, perché cancellare un intero indice dopo tre giorni è immediato, mentre cancellare singoli documenti da un indice grande sarebbe pesante. Il campo `text` usa un analizzatore inglese, così le ricerche funzionano anche senza la forma esatta delle parole. I mapping accettano solo i campi previsti, quindi un errore a monte non può riempire gli indici di campi inattesi.
 
-Le dashboard non vanno costruite a mano: il servizio `kibana-init` le importa a ogni avvio dal file `kibana/dashboards.ndjson`, versionato con il codice, così sopravvivono anche a un `docker compose down -v`. Sono tre: la **Panoramica**, per seguire la situazione (salute della pipeline, sentiment con baseline, z-score con le soglie, tabelle degli episodi e delle spiegazioni); l'**Indagine sui post**, per verificare una spiegazione leggendo i post e i link di un episodio; e la dashboard di **Sviluppo**, che controlla le fasi una per una anche durante il warmup. Nel grafico degli z-score ogni intervallo mostra il massimo e il minimo invece della media, così un singolo minuto anomalo resta visibile anche guardando 24 ore. La descrizione completa dei pannelli è nell'[Appendice D](https://claude.ai/chat/Appendice_D_Kibana.md).
+Le dashboard non vanno costruite a mano: il servizio `kibana-init` le importa a ogni avvio dal file `kibana/dashboards.ndjson`, versionato con il codice, così sopravvivono anche a un `docker compose down -v`. Sono tre: la **Panoramica**, per seguire la situazione (salute della pipeline, sentiment con baseline, z-score con le soglie, tabelle degli episodi e delle spiegazioni); l'**Indagine sui post**, per verificare una spiegazione leggendo i post e i link di un episodio; e la dashboard di **Sviluppo**, che controlla le fasi una per una anche durante il warmup. Nel grafico degli z-score ogni intervallo mostra il massimo e il minimo invece della media, così un singolo minuto anomalo resta visibile anche guardando 24 ore. La descrizione completa dei pannelli è nell'[Appendice D](Appendice_D_Kibana.md).
 
-![[Pasted image 20261110022152.png]] _Figura 10.1 – La dashboard "Panoramica"._
+![Figura 10.1](<Pasted image 20261110022152.png>)
+*Figura 10.1 – La dashboard "Panoramica".*
 
 ---
 
@@ -662,7 +674,7 @@ Le dashboard non vanno costruite a mano: il servizio `kibana-init` le importa a 
 
 **L'adattamento a un'azienda.** Servirebbero un filtro sulle parole chiave in Logstash, finestre più lunghe e soglie adatte a poche decine di post al minuto, possibilmente un modello che misuri il sentiment verso un soggetto preciso e un modello multilingua, entrambi più lenti, con un nuovo lavoro di ottimizzazione. Per un servizio da produzione servirebbero più macchine, replica dei dati, monitoraggio e autenticazione su Kibana; i componenti scelti sono pensati proprio per essere distribuiti senza riscrivere la logica.
 
-**Privacy.** La pipeline non riceve le cancellazioni di post e account, e i documenti degli alert conservano per sempre gli `uri` dei post usati dall'explainer. Le possibili soluzioni sono descritte nell'[Appendice E](https://claude.ai/chat/Appendice_E_Privacy.md).
+**Privacy.** La pipeline non riceve le cancellazioni di post e account, e i documenti degli alert conservano per sempre gli `uri` dei post usati dall'explainer. Le possibili soluzioni sono descritte nell'[Appendice E](Appendice_E_Privacy.md).
 
 **Limiti tecnici e misure da fare.** Q1 raggiunge la velocità necessaria solo con la GPU integrata raggiungibile da WSL2; su un altro computer la pipeline andrebbe adattata, e reintrodurre la variante int8 con SmoothQuant a 0,75 darebbe un'alternativa sulla CPU da circa 44 post al secondo. Restano da misurare la velocità di Q1 durante il recupero di un arretrato (e se in quel caso il watermark di due minuti basta), l'effetto della GPU al lavoro sugli altri servizi, il margine durante un vero picco di traffico e, soprattutto, il comportamento del detector e dell'explainer sul primo evento reale di grande portata.
 

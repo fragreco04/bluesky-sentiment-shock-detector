@@ -1,6 +1,6 @@
 # Appendice D – Le dashboard di Kibana
 
-Questa appendice descrive in dettaglio le dashboard riassunte nel capitolo 10 della [relazione](https://claude.ai/chat/Relazione.md).
+Questa appendice descrive in dettaglio le dashboard riassunte nel capitolo 10 della [relazione](Relazione.md).
 
 ## D.1 Concetti di base e avvio
 
@@ -20,6 +20,7 @@ In ogni pagina c'è un **selettore di tempo**, per esempio "ultime 24 ore", e un
 ## D.2 La dashboard "Panoramica"
 
 La dashboard principale, "Bluesky sentiment - Panoramica", è pensata per seguire la situazione. Si apre sulle ultime 24 ore e si aggiorna da sola ogni minuto. I suoi pannelli seguono un ordine preciso, lo stesso che si seguirebbe ragionando: prima si controlla che i dati siano affidabili, poi si guarda il sentiment, poi il ragionamento del detector, infine gli episodi.
+
 
 **Salute della pipeline.** I primi due pannelli dicono se i dati arrivano regolari. "Post al minuto e volume tipico" mostra il numero di post per minuto insieme al volume tipico stimato dal detector: un buco o un crollo improvviso indicano un'interruzione dell'ingestione, non un evento reale. "Diversità degli autori" mostra il rapporto tra autori e post, con una linea tratteggiata sulla soglia di 0,8 sotto la quale il detector scarta una finestra come probabile spam.
 

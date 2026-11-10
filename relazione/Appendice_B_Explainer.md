@@ -1,6 +1,6 @@
 # Appendice B – Dettagli dell'explainer
 
-Questa appendice completa il capitolo 7 della [relazione](https://claude.ai/chat/Relazione.md) con il prompt, le impostazioni della chiamata a Gemini, il formato del risultato e la gestione degli errori.
+Questa appendice completa il capitolo 7 della [relazione](Relazione.md) con il prompt, le impostazioni della chiamata a Gemini, il formato del risultato e la gestione degli errori.
 
 ## B.1 Il percorso di una spiegazione
 
@@ -93,16 +93,16 @@ Alcune impostazioni della chiamata meritano una spiegazione:
 
 Il risultato viene scritto sul topic `alerts.explained`, con lo stesso `alert_id` dell'episodio come chiave:
 
-|Campo|Contenuto|
+| Campo | Contenuto |
 |---|---|
-|`alert_id`|identificativo dell'episodio|
-|`explanation`|la spiegazione scritta dal modello (assente se il modello non ha risposto)|
-|`significant_terms`|i termini significativi|
-|`top_link_titles`|i titoli dei link più condivisi|
-|`top_referenced_uris`|gli `uri` dei post più citati o con più risposte|
-|`sample_uris`|gli `uri` dei post del campione passati al modello|
-|`llm_model`|il modello usato|
-|`generated_at`|quando è stata generata la spiegazione|
+| `alert_id` | identificativo dell'episodio |
+| `explanation` | la spiegazione scritta dal modello (assente se il modello non ha risposto) |
+| `significant_terms` | i termini significativi |
+| `top_link_titles` | i titoli dei link più condivisi |
+| `top_referenced_uris` | gli `uri` dei post più citati o con più risposte |
+| `sample_uris` | gli `uri` dei post del campione passati al modello |
+| `llm_model` | il modello usato |
+| `generated_at` | quando è stata generata la spiegazione |
 
 Un messaggio ha questa forma (valori illustrativi, `uri` abbreviati):
 

@@ -1,12 +1,12 @@
 # Appendice A – Topic Kafka e formato dei messaggi
 
-Questa appendice raccoglie i dettagli sul formato dei dati che nella [relazione](https://claude.ai/chat/Relazione.md) sono riassunti nei capitoli 2, 3 e 6.
+Questa appendice raccoglie i dettagli sul formato dei dati che nella [relazione](Relazione.md) sono riassunti nei capitoli 2, 3 e 6.
 
 ## A.1 Un messaggio di Jetstream
 
 Ogni messaggio di Jetstream è un oggetto JSON con due livelli. Il livello esterno descrive l'evento: chi l'ha fatto, quando, che tipo di operazione è e su quale record. Al suo interno, il campo `record` contiene il post vero e proprio. Questo è un esempio semplificato:
 
-```
+```json
 {
   "$type": "message",
   "payload": {
@@ -40,16 +40,16 @@ Dentro `record` i campi principali sono:
 
 ## A.2 I campi di posts.raw
 
-|Campo|Presenza|Origine|A cosa serve|
+| Campo | Presenza | Origine | A cosa serve |
 |---|---|---|---|
-|`uri`|sempre|costruito da `did` e `rkey`|identifica il post: serve a eliminare i duplicati|
-|`did`|sempre|`payload.did`|identifica l'autore: serve a contare gli autori distinti e a riconoscere lo spam|
-|`time`|sempre|`payload.time`|stabilisce in quale minuto cade il post|
-|`text`|sempre|`record.text`|è l'input del modello di sentiment|
-|`langs`|sempre|`record.langs`|conservato solo per tracciare il filtro sulla lingua|
-|`link_title`|se presente|titolo dell'anteprima del link|dice di quale notizia si sta parlando|
-|`reply_parent_uri`|se presente|`record.reply.parent.uri`|permette di trovare i post più discussi|
-|`quoted_uri`|se presente|uri del post citato nell'`embed`|permette di trovare i post più citati|
+| `uri` | sempre | costruito da `did` e `rkey` | identifica il post: serve a eliminare i duplicati |
+| `did` | sempre | `payload.did` | identifica l'autore: serve a contare gli autori distinti e a riconoscere lo spam |
+| `time` | sempre | `payload.time` | stabilisce in quale minuto cade il post |
+| `text` | sempre | `record.text` | è l'input del modello di sentiment |
+| `langs` | sempre | `record.langs` | conservato solo per tracciare il filtro sulla lingua |
+| `link_title` | se presente | titolo dell'anteprima del link | dice di quale notizia si sta parlando |
+| `reply_parent_uri` | se presente | `record.reply.parent.uri` | permette di trovare i post più discussi |
+| `quoted_uri` | se presente | uri del post citato nell'`embed` | permette di trovare i post più citati |
 
 `reply_parent_uri` contiene l'uri del post a cui si risponde direttamente: se si risponde a un commento, è l'uri di quel commento e non dell'inizio della discussione. `quoted_uri` si omette se l'oggetto citato non è un post (un feed, una lista…). I campi facoltativi compaiono solo se presenti e validi.
 
@@ -57,18 +57,18 @@ Dentro `record` i campi principali sono:
 
 Sugli eventi che sono commit di post, Logstash controlla che i campi indispensabili siano presenti e abbiano la forma corretta. I controlli sono organizzati in una catena: ogni evento si ferma al primo controllo che non supera, e quel controllo determina il motivo dello scarto.
 
-|Motivo|Quando scatta|
+| Motivo | Quando scatta |
 |---|---|
-|`json_non_valido`|la riga ricevuta non è un JSON valido|
-|`payload_mancante`|il messaggio non contiene l'evento|
-|`operation_non_valida`|l'operazione manca o ha un valore sconosciuto|
-|`collection_mancante`|manca il tipo di record|
-|`did_non_valido`|l'identificativo dell'autore non ha la forma `did:<metodo>:<valore>`|
-|`rkey_non_valida`|la chiave del record contiene caratteri non ammessi|
-|`time_non_valido`|l'orario non è una data valida|
-|`record_mancante`|manca il contenuto del post|
-|`text_mancante`|manca del tutto il campo del testo|
-|`text_troppo_lungo`|il testo supera i 3000 caratteri|
+| `json_non_valido` | la riga ricevuta non è un JSON valido |
+| `payload_mancante` | il messaggio non contiene l'evento |
+| `operation_non_valida` | l'operazione manca o ha un valore sconosciuto |
+| `collection_mancante` | manca il tipo di record |
+| `did_non_valido` | l'identificativo dell'autore non ha la forma `did:<metodo>:<valore>` |
+| `rkey_non_valida` | la chiave del record contiene caratteri non ammessi |
+| `time_non_valido` | l'orario non è una data valida |
+| `record_mancante` | manca il contenuto del post |
+| `text_mancante` | manca del tutto il campo del testo |
+| `text_troppo_lungo` | il testo supera i 3000 caratteri |
 
 Alcuni controlli meritano una spiegazione.
 
@@ -78,9 +78,10 @@ L'orario viene controllato in due passaggi. Il primo verifica che la stringa abb
 
 Sul testo c'è una distinzione sottile. Un testo vuoto è valido secondo le regole di Bluesky, e infatti viene solo scartato per scelta (sezione 3.3 della relazione). Un testo del tutto assente, invece, indica un evento malformato. Il limite di 3000 caratteri, infine, è dieci volte quello di Bluesky: lascia ampio margine a emoji e a post importati da altre piattaforme, ma ferma i testi chiaramente anomali.
 
+
 Gli eventi che non superano i controlli finiscono nel topic `posts.dlq`, che funziona da **dead letter queue**: un posto dove mettere da parte i messaggi che non si riescono a elaborare, invece di perderli. Ogni messaggio contiene il motivo dello scarto, il momento in cui Logstash l'ha ricevuto e l'evento originale, oppure la riga così come è arrivata se non era nemmeno un JSON valido:
 
-```
+```json
 {
   "motivo": "did_non_valido",
   "ricevuto_alle": "2026-10-21T15:08:24.112Z",
@@ -89,6 +90,7 @@ Gli eventi che non superano i controlli finiscono nel topic `posts.dlq`, che fun
 ```
 
 Nessuna fase della pipeline legge questo topic: serve a chi sviluppa o gestisce il sistema per capire cosa non va. Il volume atteso è molto basso, perché Jetstream invia dati generalmente corretti. Proprio per questo, un aumento improvviso dei messaggi nella dead letter queue è un segnale utile: può indicare che Bluesky ha cambiato il formato dei dati o che un'app sta inviando record non standard.
+
 
 ## A.4 Partizioni, compressione e limiti dell'ingestione
 
@@ -141,17 +143,17 @@ Valori illustrativi, coerenti con la sessione analizzata:
 
 Il topic **`sentiment.monitor`** riceve una riga per ogni finestra elaborata. Contiene tutti i campi di `sentiment.1m` più lo stato del detector in quel minuto:
 
-|Campo|Significato|
+| Campo | Significato |
 |---|---|
-|`author_ratio`|rapporto autori/post, l'indicatore di spam|
-|`baseline_mean`, `baseline_std`|valore tipico e variabilità del sentiment prima di questa finestra|
-|`z_sentiment`|scostamento del sentiment in deviazioni standard|
-|`baseline_volume`, `z_volume`|volume tipico in post al minuto e scostamento del volume|
-|`warmup`|vero finché il detector non ha abbastanza finestre valide|
-|`is_shock`|vero se la finestra è anomala|
-|`volume_spike`|vero se il volume è esploso, indipendentemente dal sentiment|
-|`skip_reason`|motivo per cui la finestra è stata scartata, oppure null|
-|`alert_id`|identificativo dell'episodio in corso, oppure null|
+| `author_ratio` | rapporto autori/post, l'indicatore di spam |
+| `baseline_mean`, `baseline_std` | valore tipico e variabilità del sentiment prima di questa finestra |
+| `z_sentiment` | scostamento del sentiment in deviazioni standard |
+| `baseline_volume`, `z_volume` | volume tipico in post al minuto e scostamento del volume |
+| `warmup` | vero finché il detector non ha abbastanza finestre valide |
+| `is_shock` | vero se la finestra è anomala |
+| `volume_spike` | vero se il volume è esploso, indipendentemente dal sentiment |
+| `skip_reason` | motivo per cui la finestra è stata scartata, oppure null |
+| `alert_id` | identificativo dell'episodio in corso, oppure null |
 
 `author_ratio` vale `n_authors / n_posts`; `baseline_volume` vale $e^{\mu_v} - 1$, cioè il volume tipico in post al minuto. Le finestre scartate o in warmup hanno comunque i loro z-score, utili nei grafici, ma non possono mai essere anomale.
 
@@ -190,19 +192,19 @@ Il campo `z_volume` si riferisce alla finestra del picco. Il messaggio `open` co
 
 Il significato dei parametri in `params`:
 
-| Parametro             | Valore | Significato                                                      |
-| --------------------- | ------ | ---------------------------------------------------------------- |
-| `alpha`               | 0,03   | velocità con cui la baseline segue i dati recenti                |
-| `k`                   | 3,5    | soglia di `z_sentiment` per uno shock forte                      |
-| `k_low`               | 2,5    | soglia di `z_sentiment` per uno shock moderato...                |
-| `k_vol`               | 4      | ...confermato da `z_volume` oltre questa soglia                  |
-| `clip_k`              | 3,5    | taglio della winsorizzazione, in deviazioni standard             |
-| `sigma_min_sentiment` | 0,01   | variabilità minima del sentiment                                 |
-| `sigma_min_volume`    | 0,05   | variabilità minima del log-volume                                |
-| `min_posts`           | 300    | post minimi perché una finestra sia valida                       |
-| `min_authors`         | 250    | autori minimi perché una finestra sia valida                     |
-| `r_min`               | 0,8    | rapporto autori/post minimo                                      |
-| `partial_ratio`       | 0,5    | sotto questa frazione del volume tipico la finestra è incompleta |
-| `warmup_n`            | 40     | finestre valide necessarie prima di segnalare shock              |
-| `close_after`         | 5      | finestre normali consecutive che chiudono un episodio            |
-| `gap_reset_minutes`   | 60     | buco oltre il quale la baseline riparte da zero                  |
+| Parametro | Valore | Significato |
+|---|---|---|
+| `alpha` | 0,03 | velocità con cui la baseline segue i dati recenti |
+| `k` | 3,5 | soglia di `z_sentiment` per uno shock forte |
+| `k_low` | 2,5 | soglia di `z_sentiment` per uno shock moderato... |
+| `k_vol` | 4 | ...confermato da `z_volume` oltre questa soglia |
+| `clip_k` | 3,5 | taglio della winsorizzazione, in deviazioni standard |
+| `sigma_min_sentiment` | 0,01 | variabilità minima del sentiment |
+| `sigma_min_volume` | 0,05 | variabilità minima del log-volume |
+| `min_posts` | 300 | post minimi perché una finestra sia valida |
+| `min_authors` | 250 | autori minimi perché una finestra sia valida |
+| `r_min` | 0,8 | rapporto autori/post minimo |
+| `partial_ratio` | 0,5 | sotto questa frazione del volume tipico la finestra è incompleta |
+| `warmup_n` | 40 | finestre valide necessarie prima di segnalare shock |
+| `close_after` | 5 | finestre normali consecutive che chiudono un episodio |
+| `gap_reset_minutes` | 60 | buco oltre il quale la baseline riparte da zero |

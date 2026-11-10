@@ -1,6 +1,6 @@
 # Appendice E – Privacy e GDPR
 
-Questa appendice approfondisce gli aspetti di privacy accennati nei capitoli 2, 7 e 11 della [relazione](https://claude.ai/chat/Relazione.md).
+Questa appendice approfondisce gli aspetti di privacy accennati nei capitoli 2, 7 e 11 della [relazione](Relazione.md).
 
 ## E.1 Le misure adottate
 
@@ -24,3 +24,4 @@ C'è anche un secondo aspetto, meno evidente. I dati conservati senza scadenza n
 - **Kafka.** È la parte più difficile, perché Kafka non permette di cancellare un singolo messaggio da un topic. Per i topic dei post la conservazione di tre giorni limita già il problema. Per gli alert, l'alternativa più semplice è non salvare affatto gli `uri` in Kafka e lasciarli solo in Elasticsearch, dove si possono cancellare.
 
 Oltre alle cancellazioni, un uso reale richiederebbe una verifica legale più ampia, che va oltre gli scopi di questo progetto. Andrebbero individuate la **base giuridica** del trattamento, per esempio il legittimo interesse, e le informazioni da dare agli interessati. Andrebbe valutato il trasferimento dei testi a un fornitore esterno attraverso l'explainer (capitolo 7 e Appendice B), e probabilmente andrebbe fatta una valutazione d'impatto, prevista dal GDPR per i trattamenti che osservano in modo sistematico grandi quantità di persone.
+
